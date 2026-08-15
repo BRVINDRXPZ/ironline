@@ -1,0 +1,26 @@
+# macOS
+.DS_Store
+
+# Xcode
+*.xcodeproj/*
+!*.xcodeproj/project.pbxproj
+!*.xcodeproj/xcshareddata/
+!*.xcodeproj/project.xcworkspace/
+xcuserdata/
+DerivedData/
+*.xcuserstate
+*.xcscmblueprint
+
+# Swift Package Manager
+.swiftpm/
+.build/
+
+# Secrets — never commit real credentials
+IronLine/Resources/Secrets.plist
+.env
+.env.local
+
+# Supabase CLI local state
+supabase/.branches
+supabase/.temp
+supabase/.env
