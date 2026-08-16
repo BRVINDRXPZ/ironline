@@ -12,8 +12,7 @@ Reads and simple single-table writes. No business logic.
 | Read / update own profile | `users` |
 | List active exercises | `exercises` |
 | Create a workout session | `workout_sessions` |
-| Insert a completed set | `sets` |
-| Read own set/session history | `workout_sessions`, `sets` |
+| Read own set/session history (raw) | `workout_sessions`, `sets` |
 | Read own current LINE | `the_line` |
 | Read friends / crew membership | `friendships`, `crews`, `crew_members` |
 
@@ -25,6 +24,8 @@ Anything with cross-table logic, external calls, or rules that shouldn't ship in
 
 | Function | Triggers | Does |
 |---|---|---|
+| `save-set` | client submits a completed set | inserts into `sets`, checks prior sets for that exercise, flags `is_pr` |
+| `get-history` | client requests set history for an exercise | returns the caller's sets for that `exercise_id`, most recent first |
 | `calculate-line` | after a session completes for an exercise | Epley e1RM, recency weighting, writes `the_line` row |
 | `resolve-duel` | opponent submits their set | compares `line_score`s, sets `winner_id`, calls `update-elo` |
 | `update-elo` | called by `resolve-duel` | standard ELO (K=32), updates `rankings` for both players |
