@@ -1,0 +1,35 @@
+name: iOS CI
+
+on:
+  push:
+    branches: [main, first-playable]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: macos-15
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode 16.4
+        run: sudo xcode-select -s /Applications/Xcode_16.4.app
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate project
+        run: xcodegen generate
+
+      - name: Resolve packages
+        run: xcodebuild -resolvePackageDependencies -project IronLine.xcodeproj -scheme IronLine
+
+      - name: Run unit tests
+        run: |
+          xcodebuild test \
+            -project IronLine.xcodeproj \
+            -scheme IronLine \
+            -destination 'platform=iOS Simulator,name=iPhone 16,OS=18.5' \
+            CODE_SIGNING_ALLOWED=NO
