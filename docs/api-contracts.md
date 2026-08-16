@@ -18,6 +18,8 @@ Reads and simple single-table writes. No business logic.
 
 RLS on each table enforces `auth.uid()` scoping — the client never needs to filter by user id manually, but should anyway for clarity.
 
+**Authority rule:** clients never write `the_line`, duel outcomes, rankings/ELO, or other competitive state directly. Those values must be produced by trusted server logic from verified inputs.
+
 ## Edge Functions (`supabase/functions/`)
 
 Anything with cross-table logic, external calls, or rules that shouldn't ship in the app binary.
@@ -26,7 +28,7 @@ Anything with cross-table logic, external calls, or rules that shouldn't ship in
 |---|---|---|
 | `save-set` | client submits a completed set | inserts into `sets`, checks prior sets for that exercise, flags `is_pr` |
 | `get-history` | client requests set history for an exercise | returns the caller's sets for that `exercise_id`, most recent first |
-| `calculate-line` | after a session completes for an exercise | Epley e1RM, recency weighting, writes a new `the_line` version (or baseline countdown if <3 sessions) |
+| `calculate-line` | after a session completes for an exercise | Epley e1RM, recency weighting, writes a new authoritative `the_line` version (or baseline countdown if <3 sessions) |
 | `get-line` | client wants the active LINE for an exercise | returns the highest-version `the_line` row, or `{ baseline: true, sessions_remaining }` if none exists |
 | `line-score` | client wants a set scored against the LINE | `(actual_e1RM - predicted_e1RM) / predicted_e1RM x 100` for a given `set_id` |
 | `resolve-duel` | opponent submits their set | compares `line_score`s, sets `winner_id`, calls `update-elo` |
@@ -35,7 +37,9 @@ Anything with cross-table logic, external calls, or rules that shouldn't ship in
 | `get-ghost` | client requests ghost for an exercise | returns best recent set to beat from `ghost_records` |
 | `generate-trash-talk` | during active duel rest periods | calls Claude API with duel context, writes `trash_talk_log` |
 
-Each function expects the caller's Supabase JWT in the `Authorization` header and uses it to derive `auth.uid()` server-side — never trust a user id passed in the request body.
+Each function expects the caller's Supabase JWT in the `Authorization` header and derives `auth.uid()` server-side — never trust a user id passed in the request body.
+
+Functions that need to write authoritative competitive state may use the service-role client **only after authenticating the caller**, and the user id written to the database must come from that verified JWT. Service-role credentials never ship in the iOS app.
 
 ## Adding a new Edge Function
 
