@@ -7,12 +7,19 @@ import SwiftUI
 /// This deliberately proves the core game feel before Duels, Crews, Ghosts,
 /// physique scanning, or automatic weight recognition are allowed into scope.
 struct PrototypeWorkoutView: View {
+    @EnvironmentObject private var authManager: AuthManager
     @StateObject private var camera = CameraManager()
 
     @State private var weight = 70.0
     @State private var line = PerformanceLine(weight: 70, reps: 10)
     @State private var result: LineResult?
     @State private var countdown: Int?
+
+    @State private var workoutSessionID: UUID?
+    @State private var exerciseID: UUID?
+    @State private var setNumber = 1
+    @State private var setStartedAt: Date?
+    @State private var backendStatus = "CONNECTING"
 
     var body: some View {
         ZStack {
@@ -40,8 +47,14 @@ struct PrototypeWorkoutView: View {
             .padding(.vertical, Theme.Spacing.md)
         }
         .navigationBarBackButtonHidden(false)
-        .task { camera.prepareAndStart() }
-        .onDisappear { camera.stop() }
+        .task {
+            camera.prepareAndStart()
+            await prepareBackend()
+        }
+        .onDisappear {
+            camera.stop()
+            Task { await finishBackendSession() }
+        }
     }
 
     private var header: some View {
@@ -60,6 +73,10 @@ struct PrototypeWorkoutView: View {
                 .font(.caption.weight(.bold))
                 .tracking(1.5)
                 .foregroundStyle(Theme.Color.accent)
+
+            Text(backendStatus)
+                .font(.caption2.monospaced().weight(.bold))
+                .foregroundStyle(Theme.Color.textSecondary)
         }
         .frame(maxWidth: .infinity)
         .padding(.top, 8)
@@ -134,6 +151,9 @@ struct PrototypeWorkoutView: View {
                     .font(.headline.weight(.black))
                 Text(String(format: "%+.1f%% VS EXPECTATION", result.scorePercent))
                     .font(.caption.monospacedDigit().weight(.bold))
+                Text("\(camera.repsCompleted) VERIFIED · \(camera.repsAttempted) ATTEMPTED")
+                    .font(.caption2.monospacedDigit().weight(.bold))
+                    .foregroundStyle(Theme.Color.textSecondary)
             }
             Spacer()
             Image(systemName: result.beatLine ? "arrow.up.right" : "arrow.down.right")
@@ -178,11 +198,27 @@ struct PrototypeWorkoutView: View {
     private func toggleSet() {
         if camera.isSetActive {
             camera.endSet()
+            let endedAt = Date()
+            let startedAt = setStartedAt ?? endedAt
+            let completed = camera.repsCompleted
+            let attempted = camera.repsAttempted
+            let completedWeight = weight
+
             result = LineScoring.score(
-                actualWeight: weight,
-                actualReps: camera.repsCompleted,
+                actualWeight: completedWeight,
+                actualReps: completed,
                 against: line
             )
+
+            Task {
+                await persistSet(
+                    weight: completedWeight,
+                    repsCompleted: completed,
+                    repsAttempted: attempted,
+                    startedAt: startedAt,
+                    endedAt: endedAt
+                )
+            }
             return
         }
 
@@ -193,7 +229,84 @@ struct PrototypeWorkoutView: View {
                 try? await Task.sleep(for: .seconds(1))
             }
             countdown = nil
+            setStartedAt = Date()
             camera.beginSet()
+        }
+    }
+
+    @MainActor
+    private func prepareBackend() async {
+        guard let userID = authManager.session?.user.id else {
+            backendStatus = "LOCAL MODE · NO SESSION"
+            return
+        }
+
+        do {
+            let resolvedExerciseID = try await WorkoutService.exerciseID(named: "Incline Dumbbell Press")
+            let resolvedSessionID = try await WorkoutService.startSession(userID: userID)
+
+            exerciseID = resolvedExerciseID
+            workoutSessionID = resolvedSessionID
+
+            let envelope = try await WorkoutService.getLine(exerciseID: resolvedExerciseID)
+            if let activeLine = envelope.line {
+                line = activeLine.performanceLine
+                backendStatus = "LINE V\(activeLine.version) · \(Int((activeLine.confidence * 100).rounded()))% CONF"
+            } else if envelope.baseline == true {
+                backendStatus = "BUILDING LINE · \(envelope.sessionsRemaining ?? 0) SESSIONS"
+            } else {
+                backendStatus = "PROTOTYPE LINE"
+            }
+        } catch {
+            // Camera testing should still work if backend setup/migrations are not ready.
+            backendStatus = "LOCAL MODE · \(error.localizedDescription.uppercased())"
+        }
+    }
+
+    @MainActor
+    private func persistSet(
+        weight: Double,
+        repsCompleted: Int,
+        repsAttempted: Int,
+        startedAt: Date,
+        endedAt: Date
+    ) async {
+        guard let workoutSessionID, let exerciseID else {
+            backendStatus = "LOCAL RESULT · NOT SYNCED"
+            return
+        }
+
+        backendStatus = "SYNCING VERIFIED SET"
+
+        do {
+            let saved = try await WorkoutService.saveVerifiedSet(
+                sessionID: workoutSessionID,
+                exerciseID: exerciseID,
+                setNumber: setNumber,
+                weight: weight,
+                repsCompleted: repsCompleted,
+                repsAttempted: repsAttempted,
+                startedAt: startedAt,
+                endedAt: endedAt
+            )
+            backendStatus = saved.isPR ? "VERIFIED PR · SYNCED" : "VERIFIED · SYNCED"
+            setNumber += 1
+        } catch {
+            backendStatus = "SAVE FAILED · LOCAL RESULT KEPT"
+        }
+    }
+
+    @MainActor
+    private func finishBackendSession() async {
+        guard let workoutSessionID else { return }
+
+        do {
+            try await WorkoutService.completeSession(id: workoutSessionID)
+            if let exerciseID {
+                _ = try await WorkoutService.recalculateLine(exerciseID: exerciseID)
+            }
+        } catch {
+            // Leaving the screen must never block on a network cleanup failure.
         }
     }
 
