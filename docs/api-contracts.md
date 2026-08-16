@@ -13,7 +13,7 @@ Reads and simple single-table writes. No business logic.
 | List active exercises | `exercises` |
 | Create a workout session | `workout_sessions` |
 | Read own set/session history (raw) | `workout_sessions`, `sets` |
-| Read own current LINE | `the_line` |
+| Read own LINE history (for the history chart) | `the_line` |
 | Read friends / crew membership | `friendships`, `crews`, `crew_members` |
 
 RLS on each table enforces `auth.uid()` scoping — the client never needs to filter by user id manually, but should anyway for clarity.
@@ -26,7 +26,9 @@ Anything with cross-table logic, external calls, or rules that shouldn't ship in
 |---|---|---|
 | `save-set` | client submits a completed set | inserts into `sets`, checks prior sets for that exercise, flags `is_pr` |
 | `get-history` | client requests set history for an exercise | returns the caller's sets for that `exercise_id`, most recent first |
-| `calculate-line` | after a session completes for an exercise | Epley e1RM, recency weighting, writes `the_line` row |
+| `calculate-line` | after a session completes for an exercise | Epley e1RM, recency weighting, writes a new `the_line` version (or baseline countdown if <3 sessions) |
+| `get-line` | client wants the active LINE for an exercise | returns the highest-version `the_line` row, or `{ baseline: true, sessions_remaining }` if none exists |
+| `line-score` | client wants a set scored against the LINE | `(actual_e1RM - predicted_e1RM) / predicted_e1RM x 100` for a given `set_id` |
 | `resolve-duel` | opponent submits their set | compares `line_score`s, sets `winner_id`, calls `update-elo` |
 | `update-elo` | called by `resolve-duel` | standard ELO (K=32), updates `rankings` for both players |
 | `check-duel-expiry` | cron, every 15 min | marks duels past `expires_at` as `expired`, no ELO change |
