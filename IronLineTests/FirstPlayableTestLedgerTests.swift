@@ -12,22 +12,59 @@ final class FirstPlayableTestLedgerTests: XCTestCase {
         XCTAssertTrue(summary.meetsRepAgreementGate)
         XCTAssertEqual(summary.totalHumanAttempts, 12)
         XCTAssertEqual(summary.totalIronResolvedAttempts, 12)
+        XCTAssertEqual(summary.potentialFalseNoReps, 0)
+        XCTAssertEqual(summary.missedShallowNoReps, 0)
     }
 
-    func testOneMissingVerifiedRepAcrossTenAttemptsMeetsGate() {
+    func testOneClassificationMismatchAcrossTenAttemptsMeetsGate() {
         var ledger = FirstPlayableTestLedger()
         ledger.append(record(ironVerified: 8, ironNoReps: 2, humanVerified: 9, humanNoReps: 1))
 
         XCTAssertEqual(ledger.summary.repCountAgreement, 0.9, accuracy: 0.0001)
         XCTAssertTrue(ledger.summary.meetsRepAgreementGate)
+        XCTAssertEqual(ledger.summary.potentialFalseNoReps, 1)
+        XCTAssertEqual(ledger.summary.missedShallowNoReps, 0)
     }
 
-    func testTwoMissingVerifiedRepsAcrossTenAttemptsFailsGate() {
+    func testTwoClassificationMismatchesAcrossTenAttemptsFailsGate() {
         var ledger = FirstPlayableTestLedger()
         ledger.append(record(ironVerified: 7, ironNoReps: 3, humanVerified: 9, humanNoReps: 1))
 
         XCTAssertEqual(ledger.summary.repCountAgreement, 0.8, accuracy: 0.0001)
         XCTAssertFalse(ledger.summary.meetsRepAgreementGate)
+        XCTAssertEqual(ledger.summary.potentialFalseNoReps, 2)
+    }
+
+    func testCompensatingErrorsDoNotLookPerfect() {
+        var ledger = FirstPlayableTestLedger()
+
+        // Both systems finish with nine verified reps, but they disagree about
+        // which set contained the NO REP. A totals-only metric would incorrectly
+        // call this 100% agreement.
+        ledger.append(record(ironVerified: 8, ironNoReps: 2, humanVerified: 9, humanNoReps: 1))
+        ledger.append(record(ironVerified: 10, ironNoReps: 0, humanVerified: 9, humanNoReps: 1))
+
+        XCTAssertEqual(ledger.summary.repCountAgreement, 0.9, accuracy: 0.0001)
+        XCTAssertEqual(ledger.summary.potentialFalseNoReps, 1)
+        XCTAssertEqual(ledger.summary.missedShallowNoReps, 1)
+    }
+
+    func testAttemptCountMismatchPenalizesAgreement() {
+        var ledger = FirstPlayableTestLedger()
+        ledger.append(record(ironVerified: 8, ironNoReps: 1, humanVerified: 9, humanNoReps: 1))
+
+        XCTAssertEqual(ledger.summary.repCountAgreement, 0.9, accuracy: 0.0001)
+        XCTAssertTrue(ledger.summary.meetsRepAgreementGate)
+    }
+
+    func testTrackingGapSummaryCountsAffectedSets() {
+        var ledger = FirstPlayableTestLedger()
+        ledger.append(record(ironVerified: 10, ironNoReps: 0, humanVerified: 10, humanNoReps: 0, trackingGaps: 2))
+        ledger.append(record(ironVerified: 8, ironNoReps: 1, humanVerified: 8, humanNoReps: 1, trackingGaps: 0))
+        ledger.append(record(ironVerified: 9, ironNoReps: 0, humanVerified: 9, humanNoReps: 0, trackingGaps: 1))
+
+        XCTAssertEqual(ledger.summary.totalTrackingGaps, 3)
+        XCTAssertEqual(ledger.summary.setsWithTrackingGaps, 2)
     }
 
     func testTrustAndCompetitiveTensionRatesIgnoreUnansweredSets() {
@@ -82,6 +119,7 @@ final class FirstPlayableTestLedgerTests: XCTestCase {
 
         XCTAssertEqual(restored, ledger)
         XCTAssertEqual(restored.summary.totalTrackingGaps, 2)
+        XCTAssertEqual(restored.summary.setsWithTrackingGaps, 1)
     }
 
     private func record(
