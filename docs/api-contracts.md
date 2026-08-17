@@ -50,7 +50,7 @@ Anything with cross-table logic, external calls, or rules that shouldn't ship in
 
 Duel expiry (48h) runs as a `pg_cron` job directly against the `duels` table every 15 minutes — no Edge Function needed for a plain status flip.
 
-Each function expects the caller's Supabase JWT in the `Authorization` header and uses it to derive `auth.uid()` server-side — never trust a user id passed in the request body.
+Each function expects the caller's Supabase JWT in the `Authorization` header and derives `auth.uid()` server-side — never trust a user id passed in the request body.
 
 ### Service role usage
 
