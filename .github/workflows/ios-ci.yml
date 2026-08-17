@@ -34,5 +34,5 @@ jobs:
           xcodebuild test \
             -project IronLine.xcodeproj \
             -scheme IronLine \
-            -destination 'platform=iOS Simulator,name=iPhone 16,OS=18.5' \
+            -destination 'platform=macOS,arch=arm64,variant=Designed for [iPad,iPhone]' \
             CODE_SIGNING_ALLOWED=NO
