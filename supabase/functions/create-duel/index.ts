@@ -31,16 +31,48 @@ Deno.serve(async (req) => {
     return new Response(JSON.stringify({ error: "can't duel yourself" }), { status: 400, headers: jsonHeaders });
   }
 
-  // RLS already scopes this to the caller's own sets.
+  // Duels are between friends (docs/framework.md §8 Phase 4). Previously any
+  // authenticated user could challenge any other by raw user id, which made
+  // unsolicited duels from strangers a spam and harassment vector.
+  //
+  // The friendships SELECT policy already scopes rows to ones the caller is
+  // party to, so this read cannot be used to probe other people's friendships.
+  // Both directions are checked because either side may have sent the request.
+  const { data: friendship } = await supabase
+    .from("friendships")
+    .select("id")
+    .eq("status", "accepted")
+    .or(`and(user_id.eq.${user.id},friend_id.eq.${opponent_id}),and(user_id.eq.${opponent_id},friend_id.eq.${user.id})`)
+    .maybeSingle();
+
+  if (!friendship) {
+    return new Response(
+      JSON.stringify({ error: "you can only duel an accepted friend" }),
+      { status: 403, headers: jsonHeaders },
+    );
+  }
+
+  // RLS already scopes this to the caller's own sets — a set id belonging to
+  // someone else is simply not visible here.
   const { data: set, error: setError } = await supabase
     .from("sets")
-    .select("weight, reps_completed, exercise_id")
+    .select("weight, reps_completed, exercise_id, started_at")
     .eq("id", set_id)
     .eq("exercise_id", exercise_id)
     .single();
 
   if (setError || !set) {
     return new Response(JSON.stringify({ error: "set not found for this exercise" }), { status: 400, headers: jsonHeaders });
+  }
+
+  // Keep the challenge tied to recent form rather than an all-time best dug
+  // out of history. Matches the 48h duel lifetime.
+  const setAgeMs = Date.now() - new Date(set.started_at).getTime();
+  if (setAgeMs > 48 * 60 * 60 * 1000) {
+    return new Response(
+      JSON.stringify({ error: "set is too old to back a duel (48h limit)" }),
+      { status: 400, headers: jsonHeaders },
+    );
   }
 
   const { data: line } = await supabase
@@ -72,6 +104,16 @@ Deno.serve(async (req) => {
     .single();
 
   if (error) {
+    // 016 adds partial unique indexes for the two integrity rules below.
+    // They are enforced in the database rather than only here, so a retry or
+    // a future caller cannot route around them; this just translates the
+    // constraint violation into something a client can act on.
+    if (error.code === "23505") {
+      const conflict = error.message.includes("duels_active_matchup_uidx")
+        ? "you already have an active duel with this friend for this exercise"
+        : "that set has already been used in a duel";
+      return new Response(JSON.stringify({ error: conflict }), { status: 409, headers: jsonHeaders });
+    }
     return new Response(JSON.stringify({ error: error.message }), { status: 400, headers: jsonHeaders });
   }
 
