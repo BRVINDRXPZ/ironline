@@ -126,9 +126,30 @@ final class CameraManager: NSObject, ObservableObject {
     }
 
     private func currentImageOrientation() -> CGImagePropertyOrientation {
-        // First playable deliberately locks the capture experience to portrait.
-        // Fewer degrees of freedom means easier threshold tuning and more honest tests.
         .right
+    }
+
+    /// Any gap in trustworthy pose data invalidates the in-flight movement and the
+    /// smoothing window. Resuming from a clean lockout is safer than blending stale
+    /// pre-gap angles into a new attempt.
+    private func handleTrackingLoss() {
+        let event = isSetActive ? repCounter.trackingLost() : nil
+        let attempted = repCounter.repsAttempted
+        angleSmoother.reset()
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.trackingState = .trackingLost
+            self.elbowAngle = nil
+            self.romProgress = 0
+            self.repsAttempted = attempted
+
+            if case let .noRep(reason)? = event {
+                self.lastFeedback = "NO REP — \(reason)"
+            } else {
+                self.lastFeedback = "TRACKING LOST — REPOSITION"
+            }
+        }
     }
 }
 
@@ -138,30 +159,17 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
         didOutput sampleBuffer: CMSampleBuffer,
         from connection: AVCaptureConnection
     ) {
-        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+            handleTrackingLoss()
+            return
+        }
 
         do {
             guard let pose = try poseDetector.detect(
                 in: pixelBuffer,
                 orientation: currentImageOrientation()
-            ) else {
-                // Once pose tracking disappears, any in-flight rep is no longer
-                // verifiable. Invalidate it immediately and require a fresh top
-                // position after tracking resumes.
-                let event = isSetActive ? repCounter.trackingLost() : nil
-                let attempted = repCounter.repsAttempted
-
-                DispatchQueue.main.async { [weak self] in
-                    guard let self else { return }
-                    self.trackingState = .trackingLost
-                    self.elbowAngle = nil
-                    self.romProgress = 0
-                    self.repsAttempted = attempted
-
-                    if case let .noRep(reason)? = event {
-                        self.lastFeedback = "NO REP — \(reason)"
-                    }
-                }
+            ), pose.confidence >= repCounter.minimumConfidence else {
+                handleTrackingLoss()
                 return
             }
 
@@ -188,13 +196,15 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
                 case .noRep(let reason):
                     self.lastFeedback = "NO REP — \(reason)"
                 case .none:
-                    break
+                    if self.lastFeedback == "TRACKING LOST — REPOSITION" {
+                        self.lastFeedback = nil
+                    }
                 }
             }
         } catch {
-            DispatchQueue.main.async { [weak self] in
-                self?.trackingState = .failed(error.localizedDescription)
-            }
+            // A transient Vision failure is still an observation gap. Fail closed
+            // for rep verification and allow the next good frame to recover.
+            handleTrackingLoss()
         }
     }
 }
