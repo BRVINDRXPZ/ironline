@@ -84,7 +84,7 @@ struct PrototypeWorkoutView: View {
                 .tracking(3)
                 .foregroundStyle(Theme.Color.textSecondary)
 
-            Text("\(format(line.weight)) × \(line.reps)")
+            Text("\(Format.number(line.weight)) × \(line.reps)")
                 .font(.system(size: 42, weight: .black, design: .rounded))
                 .monospacedDigit()
                 .foregroundStyle(.white)
@@ -141,7 +141,7 @@ struct PrototypeWorkoutView: View {
                         .font(.caption2.weight(.black))
                         .tracking(1.5)
                         .foregroundStyle(Theme.Color.textSecondary)
-                    Text("\(format(weight)) LB")
+                    Text("\(Format.number(weight)) LB")
                         .font(.title2.monospacedDigit().weight(.black))
                 }
 
@@ -236,16 +236,16 @@ struct PrototypeWorkoutView: View {
 
                 Section("PHASE 1 LEDGER") {
                     LabeledContent("Sets logged", value: "\(testLedger.summary.setCount)")
-                    LabeledContent("Rep agreement", value: percent(testLedger.summary.repCountAgreement))
+                    LabeledContent("Rep agreement", value: Format.percent(testLedger.summary.repCountAgreement))
                     LabeledContent(
                         "90% gate",
                         value: testLedger.summary.meetsRepAgreementGate ? "PASS" : "NOT YET"
                     )
                     if let trust = testLedger.summary.noRepTrustRate {
-                        LabeledContent("No-rep trust", value: percent(trust))
+                        LabeledContent("No-rep trust", value: Format.percent(trust))
                     }
                     if let push = testLedger.summary.linePushRate {
-                        LabeledContent("LINE push rate", value: percent(push))
+                        LabeledContent("LINE push rate", value: Format.percent(push))
                     }
                 }
 
@@ -320,7 +320,7 @@ struct PrototypeWorkoutView: View {
         return """
         IronLine First Playable Test
         Exercise: Incline Dumbbell Press
-        Weight: \(format(completedWeight)) lb
+        Weight: \(Format.number(completedWeight)) lb
         IronLine verified reps: \(completedVerifiedReps)
         IronLine no-reps: \(completedNoReps)
         Attempts resolved: \(completedAttempts)
@@ -330,10 +330,10 @@ struct PrototypeWorkoutView: View {
         Rep-count delta (IronLine - human): \(signed(completedVerifiedReps - humanCompletedReps))
         Agreed with every no-rep call: \(yesNo(agreesWithNoRepCalls))
         THE LINE made me push harder: \(yesNo(lineMadeMePushHarder))
-        THE LINE: \(format(line.weight)) × \(line.reps)
+        THE LINE: \(Format.number(line.weight)) × \(line.reps)
         Result: \(outcome) (\(score))
         Phase 1 sets logged: \(summary.setCount)
-        Phase 1 rep agreement: \(percent(summary.repCountAgreement))
+        Phase 1 rep agreement: \(Format.percent(summary.repCountAgreement))
         Phase 1 90% gate: \(summary.meetsRepAgreementGate ? "PASS" : "NOT YET")
         """
     }
@@ -545,10 +545,6 @@ struct PrototypeWorkoutView: View {
         }
     }
 
-    private func format(_ value: Double) -> String {
-        value.rounded() == value ? String(Int(value)) : String(format: "%.1f", value)
-    }
-
     private func signed(_ value: Int) -> String {
         value > 0 ? "+\(value)" : "\(value)"
     }
@@ -556,9 +552,5 @@ struct PrototypeWorkoutView: View {
     private func yesNo(_ value: Bool?) -> String {
         guard let value else { return "Not logged" }
         return value ? "Yes" : "No"
-    }
-
-    private func percent(_ value: Double) -> String {
-        String(format: "%.0f%%", value * 100)
     }
 }
