@@ -145,8 +145,22 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
                 in: pixelBuffer,
                 orientation: currentImageOrientation()
             ) else {
+                // Once pose tracking disappears, any in-flight rep is no longer
+                // verifiable. Invalidate it immediately and require a fresh top
+                // position after tracking resumes.
+                let event = isSetActive ? repCounter.trackingLost() : nil
+                let attempted = repCounter.repsAttempted
+
                 DispatchQueue.main.async { [weak self] in
-                    self?.trackingState = .trackingLost
+                    guard let self else { return }
+                    self.trackingState = .trackingLost
+                    self.elbowAngle = nil
+                    self.romProgress = 0
+                    self.repsAttempted = attempted
+
+                    if case let .noRep(reason)? = event {
+                        self.lastFeedback = "NO REP — \(reason)"
+                    }
                 }
                 return
             }

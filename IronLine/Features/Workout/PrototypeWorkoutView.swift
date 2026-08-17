@@ -96,7 +96,8 @@ struct PrototypeWorkoutView: View {
             Text(feedbackText)
                 .font(.headline.weight(.black))
                 .foregroundStyle(feedbackColor)
-                .frame(height: 24)
+                .multilineTextAlignment(.center)
+                .frame(minHeight: 24)
 
             if let angle = camera.elbowAngle {
                 Text("ELBOW  \(Int(angle.rounded()))°")
@@ -165,34 +166,58 @@ struct PrototypeWorkoutView: View {
     }
 
     private var feedbackText: String {
-        if let last = camera.lastFeedback { return last }
+        // Camera trust beats stale rep feedback. If tracking disappears, say so
+        // immediately instead of leaving the last VERIFIED message on screen.
         switch camera.trackingState {
-        case .tracking: return camera.isSetActive ? "VERIFYING" : "READY"
-        case .trackingLost: return "STEP INTO FRAME"
-        case .requestingPermission: return "REQUESTING CAMERA"
-        case .denied: return "CAMERA ACCESS REQUIRED"
-        case .failed(let message): return message.uppercased()
-        default: return "POSITION PHONE SIDE-ON"
+        case .trackingLost:
+            return camera.isSetActive ? "TRACKING LOST — RESET AT TOP" : "STEP INTO FRAME"
+        case .requestingPermission:
+            return "REQUESTING CAMERA"
+        case .denied:
+            return "CAMERA ACCESS REQUIRED"
+        case .failed(let message):
+            return message.uppercased()
+        default:
+            break
+        }
+
+        if let last = camera.lastFeedback { return last }
+
+        switch camera.trackingState {
+        case .tracking:
+            return camera.isSetActive ? "VERIFYING" : "READY — HOLD POSITION"
+        case .ready:
+            return "STEP INTO FRAME"
+        default:
+            return "POSITION PHONE SIDE-ON"
         }
     }
 
     private var feedbackColor: Color {
+        switch camera.trackingState {
+        case .trackingLost, .denied, .failed:
+            return Theme.Color.intensity
+        default:
+            break
+        }
+
         guard let feedback = camera.lastFeedback else { return Theme.Color.textSecondary }
         return feedback.hasPrefix("NO REP") ? Theme.Color.intensity : Theme.Color.success
     }
 
     private var primaryButtonTitle: String {
         if let countdown { return "STARTING IN \(countdown)" }
-        return camera.isSetActive ? "END SET" : "START VERIFIED SET"
+        if camera.isSetActive { return "END SET" }
+        return cameraReadyToStart ? "START VERIFIED SET" : "GET IN FRAME TO START"
     }
 
     private var cameraReadyToStart: Bool {
-        switch camera.trackingState {
-        case .ready, .tracking:
+        // A configured camera is not enough for a verified attempt. Require a
+        // currently detected pose before enabling the start action.
+        if case .tracking = camera.trackingState {
             return true
-        default:
-            return false
         }
+        return false
     }
 
     private func toggleSet() {
@@ -225,9 +250,20 @@ struct PrototypeWorkoutView: View {
         result = nil
         Task { @MainActor in
             for value in stride(from: 3, through: 1, by: -1) {
+                guard cameraReadyToStart else {
+                    countdown = nil
+                    return
+                }
+
                 countdown = value
                 try? await Task.sleep(for: .seconds(1))
             }
+
+            guard cameraReadyToStart else {
+                countdown = nil
+                return
+            }
+
             countdown = nil
             setStartedAt = Date()
             camera.beginSet()
