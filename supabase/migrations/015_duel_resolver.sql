@@ -1,23 +1,21 @@
--- Forward-only. Fixes two audit findings on the reconciled tree. 008_duels.sql
--- is applied production history and is deliberately left untouched.
+-- PHASE 1 of the duel-authority rollout — ADDITIVE ONLY, safe to apply while
+-- the currently deployed Edge Functions are still running.
 --
--- FINDING 1 (high) — clients could author duel outcomes directly.
--- 008 granted "Opponent can respond to and resolve a duel" as
---   for update using (auth.uid() = opponent_id)
--- With no WITH CHECK, Postgres reuses USING as the check, so opponent_id
--- itself was safe — but every other column was writable. An opponent could
--- PATCH /duels?id=eq.<id> straight through PostgREST setting
--- winner_id = themselves and status = 'completed', bypassing resolve-duel
--- entirely. That contradicts the authority rule in docs/api-contracts.md.
+-- The previous draft created this resolver AND dropped the client duel
+-- policies in one file, which had no safe ordering: deploying the new
+-- resolve-duel first meant calling an RPC that did not exist yet, and
+-- applying the migration first broke the old respond-duel, which relied on
+-- the client UPDATE policy. Split so there is never a window where live
+-- functionality is broken:
 --
--- Fix: remove client UPDATE authority from duels altogether. A column
--- blacklist in RLS would be fragile — every future column would default to
--- writable. With no UPDATE policy, RLS denies all client updates, and the
--- two legitimate transitions run server-side in Edge Functions that
--- authorize the caller first (respond-duel, resolve-duel). Clients keep
--- SELECT (their own duels) and INSERT (as challenger) from 008.
-drop policy if exists "Opponent can respond to and resolve a duel" on public.duels;
-
+--   015 (this file)  create the resolver + grants        <- policies intact
+--   016-018          additive integrity constraints      <- policies intact
+--   deploy Edge Functions
+--   019              remove client duel INSERT/UPDATE    <- functions ready
+--   020              remove client set INSERT/UPDATE     <- functions ready
+--
+-- Nothing here changes existing behaviour: it adds a function nobody calls
+-- until the new resolve-duel is deployed.
 -- FINDING 2 (high) — resolve-duel could double-apply ELO.
 -- It read the duel with status='accepted', then updated without reasserting
 -- status, so a retry or a simultaneous second request could both pass the
@@ -132,3 +130,9 @@ $$;
 -- reintroduce the very authority hole this migration closes.
 revoke all on function public.resolve_duel(uuid, uuid, uuid, numeric, uuid) from public;
 revoke all on function public.resolve_duel(uuid, uuid, uuid, numeric, uuid) from anon, authenticated;
+
+-- Only the service role may execute this. resolve-duel calls it with the
+-- service-role client after authenticating the caller. The grant is explicit
+-- rather than relying on service_role's implicit privileges, so the intended
+-- permission is visible and verifiable in the schema.
+grant execute on function public.resolve_duel(uuid, uuid, uuid, numeric, uuid) to service_role;

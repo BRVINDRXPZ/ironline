@@ -90,7 +90,21 @@ Deno.serve(async (req) => {
     challengerLineScore = ((actual - predicted) / predicted) * 100;
   }
 
-  const { data: duel, error } = await supabase
+  // 019 removes the client INSERT policy on duels, so this write goes through
+  // the service role. Everything it authorizes was previously only advisory:
+  // with a client-side INSERT policy that pinned nothing but challenger_id, a
+  // caller could POST /duels directly and author opponent_id, the set, and
+  // their own challenger_line_score. The checks above — accepted friendship,
+  // caller owns the set (RLS-scoped read), exercise match, 48h age — plus the
+  // server-computed score below are now the only way a duel gets created.
+  //
+  // challenger_id comes from the verified JWT, never from the request body.
+  const admin = createClient(
+    Deno.env.get("SUPABASE_URL")!,
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+  );
+
+  const { data: duel, error } = await admin
     .from("duels")
     .insert({
       challenger_id: user.id,
@@ -113,6 +127,14 @@ Deno.serve(async (req) => {
         ? "you already have an active duel with this friend for this exercise"
         : "that set has already been used in a duel";
       return new Response(JSON.stringify({ error: conflict }), { status: 409, headers: jsonHeaders });
+    }
+    // 016's claim trigger raises through the same path when a set is already
+    // claimed in either role; surface it as a conflict rather than a 400.
+    if (error.message?.includes("duel_set_claims")) {
+      return new Response(
+        JSON.stringify({ error: "that set has already been used in a duel" }),
+        { status: 409, headers: jsonHeaders },
+      );
     }
     return new Response(JSON.stringify({ error: error.message }), { status: 400, headers: jsonHeaders });
   }

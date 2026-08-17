@@ -39,6 +39,40 @@ Deno.serve(async (req) => {
 
   const body: SaveSetBody = await req.json();
 
+  // 020 removes the client INSERT/UPDATE policies on `sets`, so the write
+  // below goes through the service role. That policy was what previously
+  // scoped a set to the caller's own session, so the check has to be made
+  // explicitly here — otherwise moving to the service role would widen the
+  // hole instead of closing it.
+  //
+  // Read with the caller's own JWT on purpose: RLS on workout_sessions means
+  // a session id belonging to anyone else simply isn't visible, so this both
+  // proves existence and proves ownership in one query.
+  const { data: session, error: sessionError } = await supabase
+    .from("workout_sessions")
+    .select("id")
+    .eq("id", body.session_id)
+    .maybeSingle();
+
+  if (sessionError) {
+    return new Response(JSON.stringify({ error: sessionError.message }), {
+      status: 400,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+
+  if (!session) {
+    return new Response(JSON.stringify({ error: "session not found for this user" }), {
+      status: 403,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+
+  const admin = createClient(
+    Deno.env.get("SUPABASE_URL")!,
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+  );
+
   const { data: priorBest, error: priorError } = await supabase
     .from("sets")
     .select("weight, reps_completed")
@@ -59,7 +93,11 @@ Deno.serve(async (req) => {
     body.weight > priorBest.weight ||
     (body.weight === priorBest.weight && body.reps_completed > priorBest.reps_completed);
 
-  const { data: set, error } = await supabase
+  // Service-role write: after 020 there is no client INSERT policy on sets.
+  // Ownership was proven above by reading the session under the caller's JWT.
+  // Note the prior-best read above deliberately stays on the caller's client
+  // so is_pr is still computed against that user's own history only.
+  const { data: set, error } = await admin
     .from("sets")
     .insert({ ...body, is_pr: isPr })
     .select()

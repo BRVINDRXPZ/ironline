@@ -1,0 +1,38 @@
+-- PHASE 2 — BREAKING. Apply only AFTER the updated save-set is deployed.
+--
+-- 003_workouts_and_sets.sql let any authenticated client INSERT and UPDATE
+-- rows in `sets` for their own sessions. The official Swift client always
+-- goes through save-set, but the policy — not the client — is what defines
+-- the boundary. A direct PostgREST call could author reps_completed,
+-- reps_attempted, weight and rom_pass_rate at will, or edit a stored set
+-- afterwards. Every competitive number downstream is derived from that
+-- table: THE LINE, PRs, ghosts, duel line_scores, ELO. A forged row there
+-- forges all of them, and the camera referee is bypassed entirely.
+--
+-- Verified before adopting this: the reconciled iOS client has no direct
+-- set-write call sites. It writes only `users` (profile) and
+-- `workout_sessions` (create/complete). Sets are written exclusively by
+-- save-set, which now verifies session ownership and writes with the
+-- service role.
+--
+-- SELECT is deliberately left alone — the history views, calculate-line and
+-- get-history all read sets under the caller's own JWT, and that read
+-- scoping is still what keeps one user out of another's history.
+--
+-- UPDATE is dropped with no replacement: nothing in the reconciled tree
+-- edits a set after it is written. is_pr is decided at insert time. If a
+-- later feature needs to amend a set, it belongs in an Edge Function that
+-- can re-derive whatever depends on it, not in a client-side patch.
+--
+-- TRUST BOUNDARY — be precise about what this buys. It closes ordinary
+-- authenticated API bypass: a signed-in user with the anon key and their own
+-- JWT can no longer write sets by any route except save-set. It does NOT
+-- make reps cryptographically provable. save-set still accepts the counts
+-- its caller reports, and a modified or rooted client running the real app's
+-- credentials can still report numbers the camera never saw. Closing that
+-- needs attestation or server-side verification of the pose data, neither of
+-- which is in V1 scope. This raises the floor from "any API client can forge
+-- a set" to "you have to tamper with the app itself" — worth having, and not
+-- to be described as server-verified reps.
+drop policy if exists "Users can insert sets into their own sessions" on public.sets;
+drop policy if exists "Users can update sets from their own sessions" on public.sets;
