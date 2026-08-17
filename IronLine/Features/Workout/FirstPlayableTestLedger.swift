@@ -3,6 +3,8 @@ import Foundation
 struct FirstPlayableSetRecord: Codable, Equatable, Identifiable {
     let id: UUID
     let recordedAt: Date
+    let testerID: String?
+    let testSessionID: UUID?
     let weight: Double
     let ironVerifiedReps: Int
     let ironNoReps: Int
@@ -16,6 +18,8 @@ struct FirstPlayableSetRecord: Codable, Equatable, Identifiable {
     init(
         id: UUID = UUID(),
         recordedAt: Date = Date(),
+        testerID: String? = nil,
+        testSessionID: UUID? = nil,
         weight: Double,
         ironVerifiedReps: Int,
         ironNoReps: Int,
@@ -28,6 +32,8 @@ struct FirstPlayableSetRecord: Codable, Equatable, Identifiable {
     ) {
         self.id = id
         self.recordedAt = recordedAt
+        self.testerID = testerID
+        self.testSessionID = testSessionID
         self.weight = weight
         self.ironVerifiedReps = max(0, ironVerifiedReps)
         self.ironNoReps = max(0, ironNoReps)
@@ -49,11 +55,6 @@ struct FirstPlayableSetRecord: Codable, Equatable, Identifiable {
 
     /// Best count-based approximation of per-attempt referee agreement until
     /// Phase 1 captures labels for every individual attempt.
-    ///
-    /// Matching verified reps and matching no-reps are credited separately.
-    /// This prevents compensating errors (for example, one false NO REP and one
-    /// false verified rep) from cancelling each other out and appearing as 100%
-    /// agreement merely because the final verified-rep totals match.
     var matchedAttemptClassifications: Int {
         min(ironVerifiedReps, humanCompletedReps) +
         min(ironNoReps, humanShallowNoReps)
@@ -68,16 +69,25 @@ struct FirstPlayableSetRecord: Codable, Equatable, Identifiable {
         return Double(matchedAttemptClassifications) / Double(agreementDenominator)
     }
 
-    /// Surplus NO REP calls relative to the human observer. These are not proof
-    /// of a false no-rep without per-attempt labels, but they are the highest-risk
-    /// cases to review when tuning ROM thresholds.
     var potentialFalseNoReps: Int {
         max(0, ironNoReps - humanShallowNoReps)
     }
 
-    /// Human-observed shallow attempts that IronLine did not resolve as NO REP.
     var missedShallowNoReps: Int {
         max(0, humanShallowNoReps - ironNoReps)
+    }
+}
+
+struct FirstPlayableTesterProgress: Equatable, Identifiable {
+    let testerID: String
+    let setCount: Int
+    let sessionCount: Int
+
+    var id: String { testerID }
+
+    /// Canonical Phase 1 coverage: five sets per tester across at least two sessions.
+    var meetsCoverageGate: Bool {
+        setCount >= 5 && sessionCount >= 2
     }
 }
 
@@ -92,9 +102,18 @@ struct FirstPlayableTestSummary: Equatable {
     let repCountAgreement: Double
     let noRepTrustRate: Double?
     let linePushRate: Double?
+    let testerProgress: [FirstPlayableTesterProgress]
+    let unlabeledSetCount: Int
 
     var meetsRepAgreementGate: Bool {
         repCountAgreement >= 0.90
+    }
+
+    /// The test plan calls for two testers, five sets each, across at least two
+    /// sessions per tester. This gate prevents a strong accuracy percentage from
+    /// being mistaken for adequate test coverage.
+    var meetsProtocolCoverageGate: Bool {
+        testerProgress.filter(\.meetsCoverageGate).count >= 2
     }
 }
 
@@ -121,9 +140,6 @@ struct FirstPlayableTestLedger: Codable, Equatable {
         let falseNoRepRisks = records.reduce(0) { $0 + $1.potentialFalseNoReps }
         let missedNoReps = records.reduce(0) { $0 + $1.missedShallowNoReps }
 
-        // Compute agreement per set and then aggregate matched classifications.
-        // Doing this per record prevents errors in one set from cancelling errors
-        // in another set before the Phase 1 gate is evaluated.
         let matchedClassifications = records.reduce(0) { $0 + $1.matchedAttemptClassifications }
         let agreementDenominator = records.reduce(0) { $0 + $1.agreementDenominator }
         let agreement = agreementDenominator == 0
@@ -140,6 +156,21 @@ struct FirstPlayableTestLedger: Codable, Equatable {
             ? nil
             : Double(pushAnswers.filter { $0 }.count) / Double(pushAnswers.count)
 
+        let labeledRecords = records.filter { record in
+            guard let testerID = record.testerID else { return false }
+            return !testerID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        let testerIDs = Set(labeledRecords.compactMap(\.testerID)).sorted()
+        let testerProgress = testerIDs.map { testerID in
+            let testerRecords = labeledRecords.filter { $0.testerID == testerID }
+            let sessions = Set(testerRecords.compactMap(\.testSessionID))
+            return FirstPlayableTesterProgress(
+                testerID: testerID,
+                setCount: testerRecords.count,
+                sessionCount: sessions.count
+            )
+        }
+
         return FirstPlayableTestSummary(
             setCount: records.count,
             totalHumanAttempts: humanAttempts,
@@ -150,14 +181,15 @@ struct FirstPlayableTestLedger: Codable, Equatable {
             missedShallowNoReps: missedNoReps,
             repCountAgreement: agreement,
             noRepTrustRate: noRepTrustRate,
-            linePushRate: linePushRate
+            linePushRate: linePushRate,
+            testerProgress: testerProgress,
+            unlabeledSetCount: records.count - labeledRecords.count
         )
     }
 }
 
 /// Small local persistence layer for the physical-iPhone test loop.
-/// The first playable must remain usable without backend credentials, so test
-/// observations are stored on-device and can later be shared/exported.
+/// Existing v1 records decode safely because tester/session fields are optional.
 enum FirstPlayableTestStore {
     static let storageKey = "ironline.firstPlayable.testLedger.v1"
 
