@@ -16,6 +16,8 @@ final class CameraManager: NSObject, ObservableObject {
     @Published private(set) var trackingState: TrackingState = .idle
     @Published private(set) var repsCompleted = 0
     @Published private(set) var repsAttempted = 0
+    @Published private(set) var noRepCount = 0
+    @Published private(set) var trackingLossCount = 0
     @Published private(set) var elbowAngle: Double?
     @Published private(set) var romProgress = 0.0
     @Published private(set) var lastFeedback: String?
@@ -29,6 +31,7 @@ final class CameraManager: NSObject, ObservableObject {
     private var repCounter = RepCounter()
     private var angleSmoother = AngleSmoother(windowSize: 5)
     private var configured = false
+    private var trackingGapActive = false
 
     func prepareAndStart() {
         let status = AVCaptureDevice.authorizationStatus(for: .video)
@@ -65,6 +68,9 @@ final class CameraManager: NSObject, ObservableObject {
         angleSmoother.reset()
         repsCompleted = 0
         repsAttempted = 0
+        noRepCount = 0
+        trackingLossCount = 0
+        trackingGapActive = false
         lastFeedback = nil
         isSetActive = true
     }
@@ -130,9 +136,12 @@ final class CameraManager: NSObject, ObservableObject {
     }
 
     /// Any gap in trustworthy pose data invalidates the in-flight movement and the
-    /// smoothing window. Resuming from a clean lockout is safer than blending stale
-    /// pre-gap angles into a new attempt.
+    /// smoothing window. One continuous gap counts once in the gym-test telemetry,
+    /// even though Vision may emit many consecutive unusable frames.
     private func handleTrackingLoss() {
+        guard !trackingGapActive else { return }
+        trackingGapActive = true
+
         let event = isSetActive ? repCounter.trackingLost() : nil
         let attempted = repCounter.repsAttempted
         angleSmoother.reset()
@@ -144,7 +153,12 @@ final class CameraManager: NSObject, ObservableObject {
             self.romProgress = 0
             self.repsAttempted = attempted
 
+            if self.isSetActive {
+                self.trackingLossCount += 1
+            }
+
             if case let .noRep(reason)? = event {
+                self.noRepCount += 1
                 self.lastFeedback = "NO REP — \(reason)"
             } else {
                 self.lastFeedback = "TRACKING LOST — REPOSITION"
@@ -173,6 +187,8 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
                 return
             }
 
+            trackingGapActive = false
+
             let angle = angleSmoother.add(pose.elbowAngle)
             let progress = repCounter.romProgress(for: angle)
             let event = isSetActive
@@ -194,6 +210,7 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
                 case .counted(let rep):
                     self.lastFeedback = "REP \(rep) — VERIFIED"
                 case .noRep(let reason):
+                    self.noRepCount += 1
                     self.lastFeedback = "NO REP — \(reason)"
                 case .none:
                     if self.lastFeedback == "TRACKING LOST — REPOSITION" {
