@@ -40,9 +40,14 @@ struct RepCounter {
     }
 
     /// Feed one smoothed elbow-angle sample into the state machine.
-    /// Returns an event only when an attempt resolves at lockout.
+    /// Returns an event only when an attempt resolves or becomes unverifiable.
     mutating func update(angle: Double, confidence: Double) -> Event? {
-        guard angle.isFinite, confidence >= minimumConfidence else { return nil }
+        // A verified rep must be continuously observable. Treat invalid geometry or
+        // confidence below the tuning threshold as a tracking gap rather than
+        // silently bridging over an untrusted section of the movement.
+        guard angle.isFinite, confidence >= minimumConfidence else {
+            return trackingLost()
+        }
 
         // Before the first rep, require a clean lockout so we don't count a user
         // who enters frame halfway through a repetition.
