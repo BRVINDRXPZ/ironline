@@ -22,7 +22,7 @@ final class RepCounterTests: XCTestCase {
         XCTAssertEqual(events.last, .noRep(reason: "INSUFFICIENT ROM"))
     }
 
-    func testLowConfidenceSamplesAreIgnored() {
+    func testLowConfidenceSampleCannotCreateRep() {
         var counter = RepCounter()
         _ = counter.update(angle: 165, confidence: 0.9)
         _ = counter.update(angle: 90, confidence: 0.1)
@@ -30,6 +30,23 @@ final class RepCounterTests: XCTestCase {
 
         XCTAssertEqual(counter.repsCompleted, 0)
         XCTAssertEqual(counter.repsAttempted, 0)
+    }
+
+    func testLowConfidenceMidAttemptInvalidatesRep() {
+        var counter = RepCounter()
+
+        _ = counter.update(angle: 165, confidence: 0.9)
+        _ = counter.update(angle: 130, confidence: 0.9)
+        let event = counter.update(angle: 110, confidence: 0.2)
+
+        XCTAssertEqual(event, .noRep(reason: "TRACKING LOST"))
+        XCTAssertEqual(counter.repsCompleted, 0)
+        XCTAssertEqual(counter.repsAttempted, 1)
+
+        // A return to lockout only re-arms after the confidence gap.
+        XCTAssertNil(counter.update(angle: 160, confidence: 0.9))
+        XCTAssertEqual(counter.repsCompleted, 0)
+        XCTAssertEqual(counter.repsAttempted, 1)
     }
 
     func testEnteringFrameAtBottomDoesNotCreateGhostRep() {
