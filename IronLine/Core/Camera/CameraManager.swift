@@ -158,7 +158,7 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
                     self.romProgress = 0
                     self.repsAttempted = attempted
 
-                    if case .noRep(let reason) = event {
+                    if case let .noRep(reason)? = event {
                         self.lastFeedback = "NO REP — \(reason)"
                     }
                 }
