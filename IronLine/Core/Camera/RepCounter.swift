@@ -7,6 +7,7 @@ import Foundation
 /// - full ROM: elbow angle <= `bottomAngle`
 /// - a rep only counts after top -> bottom -> top
 /// - a shallow attempt that returns to top is surfaced as a no-rep
+/// - tracking loss invalidates any in-flight attempt and requires a fresh lockout
 struct RepCounter {
     enum Event: Equatable {
         case counted(rep: Int)
@@ -78,6 +79,26 @@ struct RepCounter {
         }
 
         return .noRep(reason: "INSUFFICIENT ROM")
+    }
+
+    /// Invalidate camera-dependent state after pose tracking disappears.
+    ///
+    /// A rep is only official when IronLine observes the entire top -> bottom -> top
+    /// sequence. If tracking disappears during an attempt, that attempt can never be
+    /// verified after the athlete re-enters frame. Requiring a fresh lockout also
+    /// prevents a mid-rep re-entry from becoming a ghost rep.
+    mutating func trackingLost() -> Event? {
+        let interruptedAttempt = attemptInProgress
+
+        if interruptedAttempt {
+            repsAttempted += 1
+        }
+
+        armedAtTop = false
+        attemptInProgress = false
+        minimumAngleThisAttempt = nil
+
+        return interruptedAttempt ? .noRep(reason: "TRACKING LOST") : nil
     }
 
     /// 0 = lockout/top, 1 = target bottom depth.
