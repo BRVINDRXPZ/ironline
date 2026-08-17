@@ -26,6 +26,8 @@ struct PrototypeWorkoutView: View {
     @State private var humanShallowReps = 0
     @State private var agreesWithNoRepCalls: Bool?
     @State private var lineMadeMePushHarder: Bool?
+    @State private var testLedger = FirstPlayableTestLedger()
+    @State private var currentTestRecordID: UUID?
 
     @State private var workoutSessionID: UUID?
     @State private var exerciseID: UUID?
@@ -65,6 +67,7 @@ struct PrototypeWorkoutView: View {
                 .presentationDragIndicator(.visible)
         }
         .task {
+            testLedger = FirstPlayableTestStore.load()
             camera.prepareAndStart()
             await prepareBackend()
         }
@@ -188,7 +191,7 @@ struct PrototypeWorkoutView: View {
                 Button {
                     showingDebrief = true
                 } label: {
-                    Label("LOG HUMAN CHECK", systemImage: "person.badge.shield.checkmark")
+                    Label(currentTestRecordID == nil ? "LOG HUMAN CHECK" : "EDIT HUMAN CHECK", systemImage: "person.badge.shield.checkmark")
                         .font(.caption.weight(.black))
                 }
 
@@ -231,6 +234,21 @@ struct PrototypeWorkoutView: View {
                     LabeledContent("Rep-count delta", value: signed(completedVerifiedReps - humanCompletedReps))
                 }
 
+                Section("PHASE 1 LEDGER") {
+                    LabeledContent("Sets logged", value: "\(testLedger.summary.setCount)")
+                    LabeledContent("Rep agreement", value: percent(testLedger.summary.repCountAgreement))
+                    LabeledContent(
+                        "90% gate",
+                        value: testLedger.summary.meetsRepAgreementGate ? "PASS" : "NOT YET"
+                    )
+                    if let trust = testLedger.summary.noRepTrustRate {
+                        LabeledContent("No-rep trust", value: percent(trust))
+                    }
+                    if let push = testLedger.summary.linePushRate {
+                        LabeledContent("LINE push rate", value: percent(push))
+                    }
+                }
+
                 Section {
                     ShareLink(item: setReportText(result)) {
                         Label("SHARE COMPLETE TEST SNAPSHOT", systemImage: "square.and.arrow.up")
@@ -241,8 +259,11 @@ struct PrototypeWorkoutView: View {
             .navigationTitle("Set Debrief")
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { showingDebrief = false }
-                        .fontWeight(.bold)
+                    Button("Save") {
+                        saveCurrentTestRecord()
+                        showingDebrief = false
+                    }
+                    .fontWeight(.bold)
                 }
             }
         }
@@ -294,6 +315,8 @@ struct PrototypeWorkoutView: View {
             score = "N/A"
         }
 
+        let summary = testLedger.summary
+
         return """
         IronLine First Playable Test
         Exercise: Incline Dumbbell Press
@@ -309,6 +332,9 @@ struct PrototypeWorkoutView: View {
         THE LINE made me push harder: \(yesNo(lineMadeMePushHarder))
         THE LINE: \(format(line.weight)) × \(line.reps)
         Result: \(outcome) (\(score))
+        Phase 1 sets logged: \(summary.setCount)
+        Phase 1 rep agreement: \(percent(summary.repCountAgreement))
+        Phase 1 90% gate: \(summary.meetsRepAgreementGate ? "PASS" : "NOT YET")
         """
     }
 
@@ -379,6 +405,7 @@ struct PrototypeWorkoutView: View {
             humanShallowReps = completedNoReps
             agreesWithNoRepCalls = nil
             lineMadeMePushHarder = nil
+            currentTestRecordID = nil
 
             result = LineScoring.score(
                 actualWeight: completedWeight,
@@ -419,6 +446,28 @@ struct PrototypeWorkoutView: View {
             setStartedAt = Date()
             camera.beginSet()
         }
+    }
+
+    private func saveCurrentTestRecord() {
+        guard let result else { return }
+
+        let recordID = currentTestRecordID ?? UUID()
+        let record = FirstPlayableSetRecord(
+            id: recordID,
+            weight: completedWeight,
+            ironVerifiedReps: completedVerifiedReps,
+            ironNoReps: completedNoReps,
+            ironTrackingGaps: completedTrackingGaps,
+            humanCompletedReps: humanCompletedReps,
+            humanShallowNoReps: humanShallowReps,
+            agreedWithEveryNoRepCall: agreesWithNoRepCalls,
+            lineMadeUserPushHarder: lineMadeMePushHarder,
+            lineScorePercent: result.scorePercent
+        )
+
+        testLedger.replace(record)
+        FirstPlayableTestStore.save(testLedger)
+        currentTestRecordID = recordID
     }
 
     @MainActor
@@ -507,5 +556,9 @@ struct PrototypeWorkoutView: View {
     private func yesNo(_ value: Bool?) -> String {
         guard let value else { return "Not logged" }
         return value ? "Yes" : "No"
+    }
+
+    private func percent(_ value: Double) -> String {
+        String(format: "%.0f%%", value * 100)
     }
 }
