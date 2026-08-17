@@ -38,12 +38,18 @@ Deno.serve(async (req) => {
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
   );
 
+  // expires_at is part of the filter, not a prior check. The cron sweep only
+  // flips expired duels every 15 minutes, so a duel past its deadline still
+  // reads 'pending' for up to that long — and checking expiry beforehand
+  // would race with cron flipping the row. As part of the condition, an
+  // expired duel simply matches nothing.
   const { data: duel, error } = await admin
     .from("duels")
     .update({ status: action === "accept" ? "accepted" : "declined" })
     .eq("id", duel_id)
     .eq("opponent_id", user.id)
     .eq("status", "pending")
+    .gt("expires_at", new Date().toISOString())
     .select()
     .maybeSingle();
 
@@ -53,8 +59,8 @@ Deno.serve(async (req) => {
 
   if (!duel) {
     return new Response(
-      JSON.stringify({ error: "duel not found, not yours to answer, or already answered" }),
-      { status: 400, headers: jsonHeaders },
+      JSON.stringify({ error: "duel not found, not yours to answer, already answered, or expired" }),
+      { status: 409, headers: jsonHeaders },
     );
   }
 

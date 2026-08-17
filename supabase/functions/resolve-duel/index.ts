@@ -66,6 +66,15 @@ Deno.serve(async (req) => {
     );
   }
 
+  // Created here rather than just before the RPC because the baseline
+  // fallback below also needs it. Everything above this point authenticated
+  // and authorized the caller against this specific duel; the service role is
+  // only used after that, and every read through it re-verifies ownership.
+  const admin = createClient(
+    Deno.env.get("SUPABASE_URL")!,
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+  );
+
   const { data: line } = await supabase
     .from("the_line")
     .select("predicted_weight, predicted_reps")
@@ -89,12 +98,40 @@ Deno.serve(async (req) => {
     if (challengerScore > opponentLineScore) winnerId = duel.challenger_id;
     else if (opponentLineScore > challengerScore) winnerId = duel.opponent_id;
   } else {
-    const { data: challengerSet } = await supabase
+    // Baseline fallback: at least one side has no LINE yet, so compare raw
+    // e1RM instead.
+    //
+    // This read MUST NOT use the caller's client. RLS on `sets` scopes SELECT
+    // to rows in the reader's own workout_sessions, so the opponent — who is
+    // the caller here — cannot see the challenger's set at all. The previous
+    // version did exactly that, silently got null, treated the challenger's
+    // e1RM as 0, and handed the opponent the win on every baseline duel.
+    //
+    // Read it with the service role instead, but do not trust the duel row
+    // alone: verify the set really belongs to the challenger and really is
+    // for this duel's exercise. The join to workout_sessions is what proves
+    // ownership, since `sets` has no user_id of its own.
+    const { data: challengerSet } = await admin
       .from("sets")
-      .select("weight, reps_completed")
+      .select("weight, reps_completed, exercise_id, workout_sessions!inner(user_id)")
       .eq("id", duel.challenger_set_id)
-      .single();
-    const challengerE1RM = challengerSet ? estimatedOneRepMax(challengerSet.weight, challengerSet.reps_completed) : 0;
+      .eq("exercise_id", duel.exercise_id)
+      .maybeSingle();
+
+    const challengerSetIsValid = challengerSet
+      && challengerSet.workout_sessions?.user_id === duel.challenger_id;
+
+    if (!challengerSetIsValid) {
+      // Refusing is the honest outcome. Scoring 0 for the challenger here is
+      // what produced the original bias; a duel we cannot score fairly should
+      // not be silently decided.
+      return new Response(
+        JSON.stringify({ error: "challenger set is missing or does not match this duel" }),
+        { status: 409, headers: jsonHeaders },
+      );
+    }
+
+    const challengerE1RM = estimatedOneRepMax(challengerSet.weight, challengerSet.reps_completed);
     const opponentE1RM = estimatedOneRepMax(opponentSet.weight, opponentSet.reps_completed);
     if (challengerE1RM > opponentE1RM) winnerId = duel.challenger_id;
     else if (opponentE1RM > challengerE1RM) winnerId = duel.opponent_id;
@@ -107,15 +144,11 @@ Deno.serve(async (req) => {
   // between the two ranking writes left one player's rating moved and the
   // other's not.
   //
-  // The function reasserts status='accepted' at the write itself and returns
-  // null if no row transitioned, which is how a retry is detected. ELO is
-  // computed in there from rows locked in the same transaction rather than
-  // being passed in, so it cannot be derived from stale ratings.
-  const admin = createClient(
-    Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
-  );
-
+  // The function reasserts status='accepted' AND expires_at > now() at the
+  // write itself, and returns null if no row transitioned — which is how both
+  // a retry and an expired duel are detected. ELO is computed in there from
+  // rows locked in the same transaction rather than being passed in, so it
+  // cannot be derived from stale ratings.
   const { data: resolved, error: resolveError } = await admin.rpc("resolve_duel", {
     p_duel_id: duel_id,
     p_opponent_id: user.id,
@@ -128,12 +161,12 @@ Deno.serve(async (req) => {
     return new Response(JSON.stringify({ error: resolveError.message }), { status: 400, headers: jsonHeaders });
   }
 
-  // Lost the compare-and-swap: someone already resolved this duel. Report it
-  // rather than pretending this call is what completed it — and, critically,
-  // apply no ELO.
+  // Lost the compare-and-swap: the duel was already resolved, or its deadline
+  // passed. Report it rather than pretending this call is what completed it —
+  // and, critically, apply no ELO.
   if (!resolved) {
     return new Response(
-      JSON.stringify({ error: "duel already resolved" }),
+      JSON.stringify({ error: "duel already resolved or expired" }),
       { status: 409, headers: jsonHeaders },
     );
   }

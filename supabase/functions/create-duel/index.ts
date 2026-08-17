@@ -31,6 +31,16 @@ Deno.serve(async (req) => {
     return new Response(JSON.stringify({ error: "can't duel yourself" }), { status: 400, headers: jsonHeaders });
   }
 
+  // opponent_id is request input and gets interpolated into a raw PostgREST
+  // .or() filter below, so it must be a well-formed UUID before it goes
+  // anywhere near that string — same rule and same pattern as
+  // friend-activity. (.eq() values are parameterised and don't need this;
+  // hand-built filter strings do.)
+  const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!uuidPattern.test(opponent_id)) {
+    return new Response(JSON.stringify({ error: "opponent_id must be a valid uuid" }), { status: 400, headers: jsonHeaders });
+  }
+
   // Duels are between friends (docs/framework.md §8 Phase 4). Previously any
   // authenticated user could challenge any other by raw user id, which made
   // unsolicited duels from strangers a spam and harassment vector.

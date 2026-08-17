@@ -32,6 +32,12 @@ const readSql = (p) =>
 
 const migrations = readdirSync(join(root, "migrations")).sort();
 
+// Edge Function sources, read once up front so assertion order is free.
+const createDuel = read("functions/create-duel/index.ts");
+const resolveFn  = read("functions/resolve-duel/index.ts");
+const respondFn  = read("functions/respond-duel/index.ts");
+const saveSet    = read("functions/save-set/index.ts");
+
 const failures = [];
 const check = (name, condition, detail) => {
   if (!condition) failures.push(`${name}\n    ${detail}`);
@@ -53,12 +59,20 @@ check(
   "008's INSERT policy pinned only challenger_id, so a client could POST a duel with a forged opponent, set and line score — making create-duel's checks advisory.",
 );
 
-// Any later migration re-granting either write reopens the hole.
-const laterMigrations = migrations.filter((f) => Number(f.slice(0, 3)) > 8);
-for (const verb of ["insert", "update"]) {
-  const offenders = laterMigrations.filter((f) =>
-    new RegExp(`create\\s+policy[^;]*on\\s+public\\.duels\\s+for\\s+${verb}`, "is").test(readSql(join("migrations", f)))
+// A later migration re-granting a write reopens the hole. "Later" has to be
+// measured from the migration that revokes it, not from an arbitrary floor:
+// the original CREATE POLICY for each table is legitimate history and must
+// not be flagged. (An earlier version used a fixed `> 008`, which happened to
+// work for duels and sets but wrongly flagged 010 — the migration that
+// creates the ghost policies 021 later drops.)
+const migrationsAfter = (n) => migrations.filter((f) => Number(f.slice(0, 3)) > n);
+
+const regrantsAfter = (table, verb, afterNumber) =>
+  migrationsAfter(afterNumber).filter((f) =>
+    new RegExp(`create\\s+policy[^;]*on\\s+public\\.${table}\\s+for\\s+${verb}`, "is").test(readSql(join("migrations", f)))
   );
+for (const verb of ["insert", "update"]) {
+  const offenders = regrantsAfter("duels", verb, 19);
   check(
     `no migration re-grants client ${verb.toUpperCase()} on duels`,
     offenders.length === 0,
@@ -81,9 +95,7 @@ for (const [verb, policy] of [
     "A direct PostgREST write could forge reps, weight and ROM.",
   );
 
-  const offenders = laterMigrations.filter((f) =>
-    new RegExp(`create\\s+policy[^;]*on\\s+public\\.sets\\s+for\\s+${verb}`, "is").test(readSql(join("migrations", f)))
-  );
+  const offenders = regrantsAfter("sets", verb, 20);
   check(
     `no migration re-grants client ${verb.toUpperCase()} on sets`,
     offenders.length === 0,
@@ -91,7 +103,6 @@ for (const [verb, policy] of [
   );
 }
 
-const saveSet = read("functions/save-set/index.ts");
 
 check(
   "save-set verifies the session belongs to the caller",
@@ -108,7 +119,6 @@ check(
 // ---------------------------------------------------------------- finding 2
 // A duel transitions accepted -> completed exactly once, and ELO moves with it.
 const resolveSql = readSql("migrations/015_duel_resolver.sql");
-const resolveFn = read("functions/resolve-duel/index.ts");
 
 check(
   "resolve_duel reasserts status='accepted' at the authoritative write",
@@ -175,6 +185,115 @@ check(
   "Without this an old personal best can win a challenge issued today.",
 );
 
+// ------------------------------------------- baseline fallback correctness
+// The opponent is the caller, and RLS on `sets` scopes SELECT to the reader's
+// own sessions — so reading the challenger's set on the caller's client
+// silently returns null and hands the opponent every baseline duel.
+const fallbackBlock = (resolveFn.match(/\}\s*else\s*\{[\s\S]*?challengerE1RM[\s\S]*?\}/) ?? [""])[0];
+
+check(
+  "baseline fallback reads the challenger set with the service role",
+  /await\s+admin\s*\n?\s*\.from\(["']sets["']\)/.test(fallbackBlock),
+  "Reading it on the caller's client returns null under RLS and biases the result to the opponent.",
+);
+
+check(
+  "baseline fallback verifies the challenger set's owner",
+  /workout_sessions[\s\S]{0,300}?duel\.challenger_id/.test(fallbackBlock),
+  "The duel row naming a set id is not proof the set belongs to the challenger.",
+);
+
+check(
+  "baseline fallback verifies the challenger set's exercise",
+  /eq\(\s*["']exercise_id["']\s*,\s*duel\.exercise_id\s*\)/.test(fallbackBlock),
+  "A set for a different lift must not decide this duel.",
+);
+
+check(
+  "baseline fallback refuses rather than scoring the challenger 0",
+  /if\s*\(\s*!challengerSetIsValid\s*\)[\s\S]*?status:\s*409/.test(resolveFn)
+    && !/challengerSet\s*\?[\s\S]{0,80}?:\s*0/.test(resolveFn),
+  "Defaulting a missing challenger set to 0 e1RM is what produced the original bias.",
+);
+
+// --------------------------------------------- request-input UUID validation
+// Values interpolated into raw PostgREST filter strings must be validated
+// first. .eq() is parameterised and is intentionally not in scope here.
+check(
+  "create-duel validates opponent_id before raw .or() interpolation",
+  /uuidPattern[\s\S]{0,200}?test\(\s*opponent_id\s*\)/.test(createDuel)
+    && createDuel.indexOf("uuidPattern.test(opponent_id)") < createDuel.indexOf(".or(`"),
+  "opponent_id is request input and reaches a hand-built filter string.",
+);
+
+check(
+  "friend-activity still validates its request-supplied id",
+  /uuidPattern[\s\S]{0,200}?test\(\s*friendId\s*\)/.test(read("functions/friend-activity/index.ts")),
+  "This was already correct; the check exists so it stays that way.",
+);
+
+// ------------------------------------------------------- duel expiry at write
+check(
+  "resolve_duel makes expiry part of the transition condition",
+  /and\s+expires_at\s*>\s*now\(\)/i.test(resolveSql),
+  "Checking expiry before the write races the 15-minute cron sweep.",
+);
+
+check(
+  "respond-duel refuses expired duels in the same filter",
+  /\.gt\(\s*["']expires_at["']/.test(respondFn),
+  "A duel past its deadline still reads 'pending' until cron sweeps it.",
+);
+
+// --------------------------------------------------------- ghost authority
+const ghostAuthority = readSql("migrations/021_duel_expiry_and_ghost_authority.sql");
+
+for (const [verb, policy] of [
+  ["insert", "Users can insert their own ghost records"],
+  ["update", "Users can update their own ghost records"],
+]) {
+  check(
+    `021 drops the client ${verb.toUpperCase()} policy on ghost_records`,
+    new RegExp(`drop\\s+policy\\s+if\\s+exists\\s+"${policy}"\\s+on\\s+public\\.ghost_records`, "i").test(ghostAuthority),
+    "Ghosts are derived state; a client must not be able to invent one or mark one beaten.",
+  );
+
+  const offenders = regrantsAfter("ghost_records", verb, 21);
+  check(
+    `no migration re-grants client ${verb.toUpperCase()} on ghost_records`,
+    offenders.length === 0,
+    `Offending: ${offenders.join(", ")}`,
+  );
+}
+
+check(
+  "save-set writes ghost records with the authoritative client",
+  !/await\s+supabase\s*\n?\s*\.from\(["']ghost_records["']\)\s*\n?\s*\.(update|insert)\(/.test(saveSet)
+    && /await\s+admin[\s\S]{0,80}?from\(["']ghost_records["']\)[\s\S]{0,120}?\.update\(/.test(saveSet)
+    && /admin\.from\(["']ghost_records["']\)\.insert\(/.test(saveSet),
+  "After 021 there are no client ghost write policies, so a user-scoped write would fail.",
+);
+
+check(
+  "021 sweeps in_progress so no duel state is immortal",
+  /status\s+in\s*\(\s*'pending',\s*'accepted',\s*'in_progress'\s*\)\s*and\s*expires_at\s*<\s*now\(\)/i.test(ghostAuthority),
+  "008's sweep skips in_progress; with expiry now in the transition conditions, such a duel could never expire, be answered, or be resolved.",
+);
+
+// -------------------------------------------------- save-set input hygiene
+check(
+  "save-set rejects impossible payloads",
+  /reps_completed cannot exceed reps_attempted/.test(saveSet)
+    && /ended_at cannot be before started_at/.test(saveSet),
+  "Domain sanity, so obviously-broken data cannot poison THE LINE, PRs and ghosts.",
+);
+
+check(
+  "save-set builds its insert payload explicitly",
+  !/\.insert\(\s*\{\s*\.\.\.body/.test(saveSet),
+  "Spreading the parsed request hands any invented key straight to the insert.",
+);
+
 // Global, across BOTH roles. Two per-column indexes would only make a set
 // unique within each role, still allowing challenger-set on one duel and
 // opponent-set on another.
@@ -219,7 +338,6 @@ check(
 );
 
 // ---------------------------------------------------------------- finding 5
-const createDuel = read("functions/create-duel/index.ts");
 
 check(
   "create-duel requires an accepted friendship",

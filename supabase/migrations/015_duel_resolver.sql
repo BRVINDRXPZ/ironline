@@ -53,6 +53,14 @@ declare
 begin
   -- Compare-and-swap. `status = 'accepted'` is reasserted at the
   -- authoritative write, not merely checked beforehand.
+  --
+  -- expires_at is part of the same condition on purpose. The cron sweep in
+  -- 008 only flips expired duels every 15 minutes, so status alone still
+  -- reads 'accepted' for up to a quarter hour past the deadline. Checking
+  -- expiry in the Edge Function instead would leave the same race — cron
+  -- could flip the row between that check and this write. Making it part of
+  -- the transition means an expired duel simply matches no row, and the
+  -- caller gets the same null it gets for a retry.
   update public.duels
      set opponent_set_id      = p_set_id,
          opponent_line_score  = p_opponent_line_score,
@@ -61,6 +69,7 @@ begin
    where id          = p_duel_id
      and opponent_id = p_opponent_id
      and status      = 'accepted'
+     and expires_at  > now()
   returning * into v_duel;
 
   -- Exactly-once: a retry or concurrent second request lands here and
