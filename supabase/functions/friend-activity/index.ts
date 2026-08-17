@@ -23,8 +23,9 @@ Deno.serve(async (req) => {
   }
 
   const friendId = new URL(req.url).searchParams.get("friend_id");
-  if (!friendId) {
-    return new Response(JSON.stringify({ error: "friend_id is required" }), { status: 400, headers: jsonHeaders });
+  const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!friendId || !uuidPattern.test(friendId)) {
+    return new Response(JSON.stringify({ error: "a valid friend_id is required" }), { status: 400, headers: jsonHeaders });
   }
 
   const admin = createClient(

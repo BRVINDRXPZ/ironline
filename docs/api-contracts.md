@@ -44,7 +44,7 @@ Anything with cross-table logic, external calls, or rules that shouldn't ship in
 | `respond-duel` | opponent responds | `action: accept/decline`; declining is terminal, no ELO change |
 | `resolve-duel` | opponent submits their set | computes `opponent_line_score`, picks the winner (or draw), updates both players' ELO — all in one call |
 | `get-ghost` | client requests ghost for an exercise | returns the caller's best *unbeaten* set to race, from `ghost_records` |
-| `generate-trash-talk` | during active duel rest periods | calls a self-hosted LLM (OpenAI-compatible endpoint) with duel context, writes `trash_talk_log`; skips quietly if unreachable |
+| `generate-trash-talk` | during active duel rest periods | calls a self-hosted LLM with duel context, writes `trash_talk_log`; skips quietly if unreachable |
 
 Duel expiry (48h) runs as a `pg_cron` job directly against the `duels` table every 15 minutes — no Edge Function needed for a plain status flip.
 
@@ -56,7 +56,14 @@ Most functions use the anon key + forwarded user JWT, so RLS applies exactly as 
 
 ### Self-hosted LLM for trash talk
 
-`generate-trash-talk` calls an OpenAI-compatible `/v1/chat/completions` endpoint rather than a hosted API, configured via Supabase secrets: `LLM_API_BASE_URL`, `LLM_MODEL`, optional `LLM_API_KEY`. Currently pointed at Qwen3.8-27B (AD-IQ3_S quant) running locally via Ollama, exposed through a Tailscale Funnel. Trash talk is cosmetic — if the endpoint is down or unconfigured, the function returns `{ skipped: true }` instead of erroring; nothing duel-related depends on it.
+`generate-trash-talk` calls Ollama's native `/api/chat` (not the OpenAI-compatible path — only the native endpoint supports `"think": false`, which is required for this model to produce a timely answer instead of reasoning indefinitely). Configured via Supabase secrets: `LLM_API_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY`. Currently pointed at `huihui_ai/qwen3.5-abliterated:9b` running locally via Ollama, reached through an authenticated proxy (`ops/trash-talk-proxy/`) over a Tailscale Funnel — full setup and rationale in that directory's README. A persona-lock system prompt keeps tone consistent (without it, the model tends to console the losing side rather than mock them). Trash talk is cosmetic — if the endpoint is down or unconfigured, the function returns `{ skipped: true }` instead of erroring; nothing duel-related depends on it.
+
+## Security model (audited Phase 5)
+
+- **Default**: every table has RLS enabled, self-scoped to `auth.uid()`. `exercises` is the one intentional exception — reference data, readable by any authenticated user.
+- **Cross-user reads/writes** (a friend's activity, a crew's roster, the other side of a duel's ELO) go through Edge Functions using the service role key, each gated by an explicit relationship check *before* touching the other user's data — see "Service role usage" above.
+- **RLS self-recursion**: policies that need to check "am I a member of X" against the same table they're protecting (`crew_members`) use a `SECURITY DEFINER` helper function (`is_crew_member()`) with a pinned `search_path`, rather than a same-table subquery directly in the policy — avoids infinite recursion and search_path hijacking.
+- **User-supplied IDs in hand-built filters**: any function that constructs a raw PostgREST `.or()` filter string must validate the ID is a well-formed UUID first if it comes from the request (not the JWT or a trusted DB row) — see `friend-activity` for the pattern. Don't interpolate unvalidated request input into a filter string.
 
 ## Adding a new Edge Function
 
