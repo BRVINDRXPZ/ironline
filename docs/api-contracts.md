@@ -18,6 +18,10 @@ Reads and simple single-table writes. No business logic.
 | Create a crew (creator auto-added as leader) | `crews` |
 | Leave a crew / disband a crew you created | `crew_members`, `crews` |
 | Create / view your own invite codes | `invite_codes` |
+| Read your active duels / duel history | `duels` |
+| Read your own ranking | `rankings` |
+| Read your own ghost record history | `ghost_records` |
+| Mark a trash-talk message seen | `trash_talk_log` |
 
 RLS on each table enforces `auth.uid()` scoping — the client never needs to filter by user id manually, but should anyway for clarity.
 
@@ -36,17 +40,23 @@ Anything with cross-table logic, external calls, or rules that shouldn't ship in
 | `redeem-invite` | client redeems a code | looks up a `friend` or `crew` invite code, creates the friendship or crew membership |
 | `friend-activity` | client views a friend's activity | verifies the friendship, then returns their recent completed sessions + PRs |
 | `crew-leaderboard` | client views a crew's leaderboard | verifies membership, ranks the roster by each member's most recent `line_score` |
-| `resolve-duel` | opponent submits their set | compares `line_score`s, sets `winner_id`, calls `update-elo` |
-| `update-elo` | called by `resolve-duel` | standard ELO (K=32), updates `rankings` for both players |
-| `check-duel-expiry` | cron, every 15 min | marks duels past `expires_at` as `expired`, no ELO change |
-| `get-ghost` | client requests ghost for an exercise | returns best recent set to beat from `ghost_records` |
-| `generate-trash-talk` | during active duel rest periods | calls Claude API with duel context, writes `trash_talk_log` |
+| `create-duel` | challenger issues a duel | references a set they already saved, computes `challenger_line_score`, creates the duel (`pending`, expires in 48h) |
+| `respond-duel` | opponent responds | `action: accept/decline`; declining is terminal, no ELO change |
+| `resolve-duel` | opponent submits their set | computes `opponent_line_score`, picks the winner (or draw), updates both players' ELO — all in one call |
+| `get-ghost` | client requests ghost for an exercise | returns the caller's best *unbeaten* set to race, from `ghost_records` |
+| `generate-trash-talk` | during active duel rest periods | calls a self-hosted LLM (OpenAI-compatible endpoint) with duel context, writes `trash_talk_log`; skips quietly if unreachable |
+
+Duel expiry (48h) runs as a `pg_cron` job directly against the `duels` table every 15 minutes — no Edge Function needed for a plain status flip.
 
 Each function expects the caller's Supabase JWT in the `Authorization` header and uses it to derive `auth.uid()` server-side — never trust a user id passed in the request body.
 
 ### Service role usage
 
-Most functions use the anon key + forwarded user JWT, so RLS applies exactly as it would for a direct client call. `redeem-invite`, `friend-activity`, and `crew-leaderboard` are the exception — they need to read or write rows belonging to a user other than the caller (a code's creator, a friend's sessions, a crew's other members), which RLS won't allow. These use the service role key internally, but each one manually verifies the relationship (friendship accepted, crew membership) *before* touching any other user's data — the visibility rule lives in the function, not in relaxed RLS.
+Most functions use the anon key + forwarded user JWT, so RLS applies exactly as it would for a direct client call. `redeem-invite`, `friend-activity`, `crew-leaderboard`, `resolve-duel`, and `generate-trash-talk` are the exception — they need to read or write rows belonging to a user other than the caller (a code's creator, a friend's sessions, a crew's other members, the *other* duel participant's ranking, a duel's trash-talk log). These use the service role key internally, but each one manually verifies the relationship (friendship accepted, crew membership, duel participation) *before* touching any other user's data — the visibility rule lives in the function, not in relaxed RLS.
+
+### Self-hosted LLM for trash talk
+
+`generate-trash-talk` calls an OpenAI-compatible `/v1/chat/completions` endpoint rather than a hosted API, configured via Supabase secrets: `LLM_API_BASE_URL`, `LLM_MODEL`, optional `LLM_API_KEY`. Currently pointed at Qwen3.8-27B (AD-IQ3_S quant) running locally via Ollama, exposed through a Tailscale Funnel. Trash talk is cosmetic — if the endpoint is down or unconfigured, the function returns `{ skipped: true }` instead of erroring; nothing duel-related depends on it.
 
 ## Adding a new Edge Function
 

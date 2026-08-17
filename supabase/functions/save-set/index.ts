@@ -4,6 +4,7 @@
 // intentionally the simple V1 version.
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/cors.ts";
+import { estimatedOneRepMax } from "../_shared/line.ts";
 
 interface SaveSetBody {
   session_id: string;
@@ -70,6 +71,35 @@ Deno.serve(async (req) => {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
+
+  // Ghost bookkeeping (docs/framework.md §8 Phase 4): every set becomes a
+  // ghost record, and any of the user's prior unbeaten ghosts this set's
+  // e1RM surpasses get marked beaten.
+  const { data: priorGhosts } = await supabase
+    .from("ghost_records")
+    .select("id, weight, reps")
+    .eq("exercise_id", body.exercise_id)
+    .eq("beaten", false);
+
+  const newE1RM = estimatedOneRepMax(body.weight, body.reps_completed);
+  const beatenIds = (priorGhosts ?? [])
+    .filter((g) => estimatedOneRepMax(g.weight, g.reps) < newE1RM)
+    .map((g) => g.id);
+
+  if (beatenIds.length > 0) {
+    await supabase
+      .from("ghost_records")
+      .update({ beaten: true, beaten_by_set_id: set.id })
+      .in("id", beatenIds);
+  }
+
+  await supabase.from("ghost_records").insert({
+    user_id: user.id,
+    exercise_id: body.exercise_id,
+    set_id: set.id,
+    weight: body.weight,
+    reps: body.reps_completed,
+  });
 
   return new Response(JSON.stringify({ set }), {
     headers: { ...corsHeaders, "Content-Type": "application/json" },
