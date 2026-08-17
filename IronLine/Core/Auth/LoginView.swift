@@ -3,7 +3,7 @@ import SwiftUI
 struct LoginView: View {
     @EnvironmentObject private var authManager: AuthManager
 
-    var onTryLocal: (() -> Void)?
+    var onTryLocal: () -> Void
 
     @State private var email = ""
     @State private var password = ""
@@ -71,22 +71,20 @@ struct LoginView: View {
                             .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.button))
                     }
 
-                    if let onTryLocal {
-                        Button(action: onTryLocal) {
-                            HStack(spacing: 8) {
-                                Image(systemName: "bolt.fill")
-                                Text("ENTER FIRST PLAYABLE")
-                            }
-                            .font(.subheadline.weight(.black))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 15)
-                            .foregroundStyle(Theme.Color.textPrimary)
-                            .background(Theme.Color.surface)
-                            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.button))
-                            .overlay {
-                                RoundedRectangle(cornerRadius: Theme.Radius.button)
-                                    .stroke(Theme.Color.textSecondary.opacity(0.25), lineWidth: 1)
-                            }
+                    Button(action: onTryLocal) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "bolt.fill")
+                            Text("ENTER FIRST PLAYABLE")
+                        }
+                        .font(.subheadline.weight(.black))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 15)
+                        .foregroundStyle(Theme.Color.textPrimary)
+                        .background(Theme.Color.surface)
+                        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.button))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: Theme.Radius.button)
+                                .stroke(Theme.Color.textSecondary.opacity(0.25), lineWidth: 1)
                         }
                     }
 
