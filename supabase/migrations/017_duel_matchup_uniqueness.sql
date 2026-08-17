@@ -11,16 +11,29 @@
 -- Keyed on the unordered pair via least/greatest, so direction stops
 -- mattering. Both are immutable over uuid, which an expression index needs.
 --
--- Still scoped to non-terminal states, so once a duel is completed,
--- declined, or expired it leaves the index and a rematch is allowed.
+-- Scoped to every non-terminal state, so once a duel is completed, declined,
+-- or expired it leaves the index and a rematch is allowed.
 --
--- PREFLIGHT — fails if a reciprocal pair is already live. Check first:
+-- 'in_progress' is included. 008's status check defines six states —
+-- pending, accepted, declined, in_progress, completed, expired — and while no
+-- current Edge Function writes 'in_progress', it is a legal value the schema
+-- permits. Omitting it would leave a hole: a duel parked in that state would
+-- not occupy the index, so a second live duel could be opened for the same
+-- pair and exercise. Treat it as active until it is deliberately removed from
+-- the model.
+--
+-- Related, not fixed here (would be new scope): the pg_cron expiry job in 008
+-- also only sweeps 'pending' and 'accepted', so an 'in_progress' duel would
+-- never expire either. Flagged in the reconciliation report.
+--
+-- PREFLIGHT — this index fails to build if a reciprocal or duplicate pair is
+-- already live. Check first:
 --
 --   select least(challenger_id, opponent_id)    as a,
 --          greatest(challenger_id, opponent_id) as b,
 --          exercise_id, count(*)
 --     from public.duels
---    where status in ('pending', 'accepted')
+--    where status in ('pending', 'accepted', 'in_progress')
 --    group by 1, 2, 3
 --   having count(*) > 1;
 --
@@ -34,4 +47,4 @@ create unique index if not exists duels_active_matchup_uidx
     greatest(challenger_id, opponent_id),
     exercise_id
   )
-  where status in ('pending', 'accepted');
+  where status in ('pending', 'accepted', 'in_progress');

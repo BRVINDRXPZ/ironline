@@ -14,15 +14,31 @@
 -- write down with it, rather than leaving a duel pointing at a set someone
 -- else already claimed.
 --
--- PREFLIGHT — the backfill below fails if production already contains a set
--- used more than once. Run this first; a non-empty result must be resolved
--- deliberately, because collapsing it means voiding a recorded duel:
+-- PREFLIGHT — this migration does NOT fail on historical duplicates, and the
+-- earlier draft of this comment wrongly said it did. The backfill below uses
+-- `on conflict do nothing`, so if a set was already used twice it installs
+-- one claim and silently leaves the second duel unclaimed. The migration
+-- succeeds either way.
+--
+-- Run this anyway, before applying, because those rows need a human decision
+-- that the migration deliberately does not make:
 --
 --   select set_id, count(*) from (
 --     select challenger_set_id as set_id from public.duels where challenger_set_id is not null
 --     union all
 --     select opponent_set_id   as set_id from public.duels where opponent_set_id   is not null
 --   ) s group by set_id having count(*) > 1;
+--
+-- Precisely what happens to a non-empty result:
+--   * the preflight surfaces it for review
+--   * the backfill installs exactly one claim per already-used set
+--   * pre-existing duplicate duels are NOT repaired, voided, or re-scored —
+--     they stay exactly as they are, including any ELO already applied
+--   * from then on, new cross-role reuse of any claimed set is blocked
+--     transactionally by the trigger below
+--
+-- So this closes the door going forward without rewriting competitive
+-- history. Voiding a past duel is a product call, not a migration's.
 
 create table if not exists public.duel_set_claims (
   set_id     uuid primary key references public.sets(id)  on delete cascade,
@@ -52,11 +68,12 @@ select opponent_set_id, id, 'opponent'
  where opponent_set_id is not null
 on conflict (set_id) do nothing;
 
--- `on conflict do nothing` above is for the backfill only — it keeps this
--- migration applicable when history already contains a duplicate rather than
--- refusing to install the protection at all. The preflight query is what
--- surfaces those cases for a human decision. New claims below do NOT swallow
--- conflicts; they must fail loudly.
+-- `on conflict do nothing` is for the backfill only. It is what lets the
+-- protection install against imperfect history instead of refusing to apply;
+-- the preflight above is what surfaces those rows for review. New claims
+-- below do NOT swallow conflicts — they must fail loudly, so a losing race
+-- aborts the duel write rather than recording a duel against a set someone
+-- else already claimed.
 create or replace function public.claim_duel_sets()
 returns trigger
 language plpgsql

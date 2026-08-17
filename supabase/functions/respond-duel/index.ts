@@ -26,7 +26,7 @@ Deno.serve(async (req) => {
     return new Response(JSON.stringify({ error: "duel_id and action (accept/decline) are required" }), { status: 400, headers: jsonHeaders });
   }
 
-  // 015 removed client UPDATE authority on duels, so this write goes through
+  // 019 removes client UPDATE authority on duels, so this write goes through
   // the service role. The authorization it replaces is reproduced explicitly:
   // only this duel, only its opponent, only out of 'pending'. Those filters
   // are the whole permission check now — never relax them.

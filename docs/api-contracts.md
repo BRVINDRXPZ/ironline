@@ -68,6 +68,10 @@ Most functions use the anon key + forwarded user JWT, so RLS applies exactly as 
 
 `rankings` likewise has no client write policy: ELO moves only inside `public.resolve_duel`, which is `SECURITY DEFINER` with EXECUTE revoked from `anon` and `authenticated`. A duel transitions `accepted → completed` exactly once — the status is reasserted in the `UPDATE ... WHERE`, and a retry gets 409 with no ELO applied.
 
+`sets` likewise has no client INSERT or UPDATE policy after `020` — every set write goes through `save-set`, which verifies authentication and session ownership before writing with the service role.
+
+**Be precise about what that last one means.** It closes direct PostgREST mutation of `sets` and gives set writes a single auditable entry point. It does **not** verify that the reported reps, weight, or ROM came from the camera referee — `save-set` accepts those fields from its caller. And it does not require a tampered app to abuse: `save-set` is an authenticated public Edge Function, so any user who can sign in can call it directly with a fabricated payload. This is authority hygiene, not anti-cheat. Real attestation would need App Attest / device attestation or server-verifiable referee evidence, both outside V1 scope. **Nothing here is "server-verified reps."**
+
 Backend invariants for all of the above are enforced in CI by `supabase/checks/authority-invariants.mjs`. They are static shape checks, not integration tests; concurrency behavior still needs verification against a real database.
 
 ## Security model (audited Phase 5)

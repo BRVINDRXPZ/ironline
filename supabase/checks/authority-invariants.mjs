@@ -235,11 +235,23 @@ check(
   "Keying on (challenger, opponent) lets A->B and B->A both be live for the same exercise.",
 );
 
+// Must cover every non-terminal state 008's check constraint allows, not just
+// the two the Edge Functions currently write. A duel parked in 'in_progress'
+// would otherwise sit outside the index and let a second live duel open for
+// the same pair and exercise.
 check(
-  "017 stays scoped to non-terminal states",
-  /where\s+status\s+in\s*\(\s*'pending',\s*'accepted'\s*\)/i.test(matchup),
-  "Rematches must be allowed once a duel completes, declines or expires.",
+  "017 covers all three active states",
+  /where\s+status\s+in\s*\(\s*'pending',\s*'accepted',\s*'in_progress'\s*\)/i.test(matchup),
+  "Omitting 'in_progress' leaves a hole; including a terminal state would block rematches.",
 );
+
+for (const terminal of ["completed", "declined", "expired"]) {
+  check(
+    `017 does not treat '${terminal}' as active`,
+    !new RegExp(`where\\s+status\\s+in[^)]*'${terminal}'`, "i").test(matchup),
+    "Rematches must be allowed once a duel reaches a terminal state.",
+  );
+}
 
 // ---------------------------------------------------------------- finding 4
 const redeem = read("functions/redeem-invite/index.ts");

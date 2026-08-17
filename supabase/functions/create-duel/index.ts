@@ -118,18 +118,20 @@ Deno.serve(async (req) => {
     .single();
 
   if (error) {
-    // 016 adds partial unique indexes for the two integrity rules below.
-    // They are enforced in the database rather than only here, so a retry or
-    // a future caller cannot route around them; this just translates the
+    // Both integrity rules live in the database, not just here, so a retry or
+    // a future caller cannot route around them. This only translates the
     // constraint violation into something a client can act on.
+    //
+    //   017  duels_active_matchup_uidx — one live duel per unordered friend
+    //        pair per exercise
+    //   016  duel_set_claims — one competitive use per set, across both
+    //        roles; its trigger raises 23505 from duel_set_claims_pkey
     if (error.code === "23505") {
       const conflict = error.message.includes("duels_active_matchup_uidx")
         ? "you already have an active duel with this friend for this exercise"
         : "that set has already been used in a duel";
       return new Response(JSON.stringify({ error: conflict }), { status: 409, headers: jsonHeaders });
     }
-    // 016's claim trigger raises through the same path when a set is already
-    // claimed in either role; surface it as a conflict rather than a 400.
     if (error.message?.includes("duel_set_claims")) {
       return new Response(
         JSON.stringify({ error: "that set has already been used in a duel" }),

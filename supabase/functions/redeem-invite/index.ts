@@ -62,7 +62,7 @@ Deno.serve(async (req) => {
   // whoever commits first moves use_count, and the loser's filter no longer
   // matches, so it cannot overwrite. The check above still runs first purely
   // to give the ordinary "limit reached" case a clearer error than a lost
-  // race would. Migration 017 adds a CHECK constraint as the backstop for any
+  // race would. Migration 018 adds a CHECK constraint as the backstop for any
   // future writer that forgets to do this.
   const { data: claimed, error: claimError } = await admin
     .from("invite_codes")

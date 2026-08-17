@@ -24,15 +24,31 @@
 -- later feature needs to amend a set, it belongs in an Edge Function that
 -- can re-derive whatever depends on it, not in a client-side patch.
 --
--- TRUST BOUNDARY — be precise about what this buys. It closes ordinary
--- authenticated API bypass: a signed-in user with the anon key and their own
--- JWT can no longer write sets by any route except save-set. It does NOT
--- make reps cryptographically provable. save-set still accepts the counts
--- its caller reports, and a modified or rooted client running the real app's
--- credentials can still report numbers the camera never saw. Closing that
--- needs attestation or server-side verification of the pose data, neither of
--- which is in V1 scope. This raises the floor from "any API client can forge
--- a set" to "you have to tamper with the app itself" — worth having, and not
--- to be described as server-verified reps.
+-- TRUST BOUNDARY — state this precisely, because it is easy to overclaim.
+--
+-- What this migration does:
+--   * closes direct PostgREST mutation of `sets`
+--   * centralises all ordinary set writes through save-set
+--   * save-set verifies authentication and that the session belongs to the
+--     caller before writing
+--
+-- What it does NOT do:
+--   * it does not independently verify that the reported reps, weight or ROM
+--     came from the camera referee. save-set accepts those fields from its
+--     caller and stores them.
+--   * it does not require an attacker to tamper with the app. save-set is an
+--     authenticated public Edge Function; any user who can sign in can call
+--     it directly with a crafted HTTP request and a fabricated payload. No
+--     rooted or modified client is needed.
+--
+-- So this is authority hygiene, not anti-cheat: it removes a second, wholly
+-- unpoliced write path and gives every set write one auditable entry point.
+-- It does not make a reported rep trustworthy.
+--
+-- Making competitive numbers actually attestable would need something like
+-- App Attest / device attestation on the caller, or referee evidence the
+-- server can verify independently (pose summaries, signed frames). Both are
+-- outside V1 scope. Nothing here should be described as "server-verified
+-- reps".
 drop policy if exists "Users can insert sets into their own sessions" on public.sets;
 drop policy if exists "Users can update sets from their own sessions" on public.sets;
