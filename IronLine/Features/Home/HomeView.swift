@@ -10,6 +10,7 @@ struct HomeView: View {
                     header
                     heroLineCard
                     startCard
+                    phase1Card
                     refereeStrip
                     firstPlayableRules
                 }
@@ -137,6 +138,36 @@ struct HomeView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .foregroundStyle(.white)
             .background(Theme.Color.accent, in: RoundedRectangle(cornerRadius: Theme.Radius.card))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var phase1Card: some View {
+        NavigationLink {
+            Phase1DashboardView()
+        } label: {
+            HStack(spacing: 14) {
+                Image(systemName: "gauge.with.dots.needle.67percent")
+                    .font(.title2.weight(.black))
+                    .foregroundStyle(Theme.Color.accent)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("PHASE 1 REFEREE REPORT")
+                        .font(.subheadline.weight(.black))
+                        .foregroundStyle(Theme.Color.textPrimary)
+                    Text("Agreement gate · false NO REP risk · tracking gaps · game feel")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Theme.Color.textSecondary)
+                }
+
+                Spacer()
+
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.black))
+                    .foregroundStyle(Theme.Color.textSecondary)
+            }
+            .padding(Theme.Spacing.md)
+            .background(Theme.Color.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.card))
         }
         .buttonStyle(.plain)
     }
