@@ -15,6 +15,9 @@ Reads and simple single-table writes. No business logic.
 | Read own set/session history (raw) | `workout_sessions`, `sets` |
 | Read own LINE history (for the history chart) | `the_line` |
 | Read friends / crew membership | `friendships`, `crews`, `crew_members` |
+| Create a crew (creator auto-added as leader) | `crews` |
+| Leave a crew / disband a crew you created | `crew_members`, `crews` |
+| Create / view your own invite codes | `invite_codes` |
 
 RLS on each table enforces `auth.uid()` scoping — the client never needs to filter by user id manually, but should anyway for clarity.
 
@@ -29,6 +32,10 @@ Anything with cross-table logic, external calls, or rules that shouldn't ship in
 | `calculate-line` | after a session completes for an exercise | Epley e1RM, recency weighting, writes a new `the_line` version (or baseline countdown if <3 sessions) |
 | `get-line` | client wants the active LINE for an exercise | returns the highest-version `the_line` row, or `{ baseline: true, sessions_remaining }` if none exists |
 | `line-score` | client wants a set scored against the LINE | `(actual_e1RM - predicted_e1RM) / predicted_e1RM x 100` for a given `set_id` |
+| `friend-request` | send/accept/decline a friend request | `action: send/accept/decline`; auto-accepts a reciprocal pending request instead of creating a duplicate |
+| `redeem-invite` | client redeems a code | looks up a `friend` or `crew` invite code, creates the friendship or crew membership |
+| `friend-activity` | client views a friend's activity | verifies the friendship, then returns their recent completed sessions + PRs |
+| `crew-leaderboard` | client views a crew's leaderboard | verifies membership, ranks the roster by each member's most recent `line_score` |
 | `resolve-duel` | opponent submits their set | compares `line_score`s, sets `winner_id`, calls `update-elo` |
 | `update-elo` | called by `resolve-duel` | standard ELO (K=32), updates `rankings` for both players |
 | `check-duel-expiry` | cron, every 15 min | marks duels past `expires_at` as `expired`, no ELO change |
@@ -36,6 +43,10 @@ Anything with cross-table logic, external calls, or rules that shouldn't ship in
 | `generate-trash-talk` | during active duel rest periods | calls Claude API with duel context, writes `trash_talk_log` |
 
 Each function expects the caller's Supabase JWT in the `Authorization` header and uses it to derive `auth.uid()` server-side — never trust a user id passed in the request body.
+
+### Service role usage
+
+Most functions use the anon key + forwarded user JWT, so RLS applies exactly as it would for a direct client call. `redeem-invite`, `friend-activity`, and `crew-leaderboard` are the exception — they need to read or write rows belonging to a user other than the caller (a code's creator, a friend's sessions, a crew's other members), which RLS won't allow. These use the service role key internally, but each one manually verifies the relationship (friendship accepted, crew membership) *before* touching any other user's data — the visibility rule lives in the function, not in relaxed RLS.
 
 ## Adding a new Edge Function
 
