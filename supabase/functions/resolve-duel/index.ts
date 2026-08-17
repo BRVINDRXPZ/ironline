@@ -5,7 +5,6 @@
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/cors.ts";
 import { estimatedOneRepMax } from "../_shared/line.ts";
-import { eloExpectedScore, eloNewRating } from "../_shared/elo.ts";
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -42,15 +41,29 @@ Deno.serve(async (req) => {
     return new Response(JSON.stringify({ error: "duel not found or not ready to resolve" }), { status: 400, headers: jsonHeaders });
   }
 
+  // Set eligibility. The user-scoped client is deliberate: RLS on `sets`
+  // scopes SELECT to the caller's own sessions, so a set id belonging to
+  // anyone else simply isn't visible here. That is the ownership check.
   const { data: opponentSet, error: setError } = await supabase
     .from("sets")
-    .select("weight, reps_completed, exercise_id")
+    .select("weight, reps_completed, exercise_id, started_at")
     .eq("id", set_id)
     .eq("exercise_id", duel.exercise_id)
     .single();
 
   if (setError || !opponentSet) {
     return new Response(JSON.stringify({ error: "set not found for this exercise" }), { status: 400, headers: jsonHeaders });
+  }
+
+  // The set has to have been performed *for this duel*. Without this, an old
+  // personal best could be submitted to win a challenge issued today, which
+  // defeats the point of a camera-verified contest. Duels expire in 48h, so
+  // "after the duel was created" is a tight enough window on its own.
+  if (new Date(opponentSet.started_at) <= new Date(duel.created_at)) {
+    return new Response(
+      JSON.stringify({ error: "set must be performed after the duel was created" }),
+      { status: 400, headers: jsonHeaders },
+    );
   }
 
   const { data: line } = await supabase
@@ -87,68 +100,43 @@ Deno.serve(async (req) => {
     else if (opponentE1RM > challengerE1RM) winnerId = duel.opponent_id;
   }
 
-  const { data: updatedDuel, error: updateError } = await supabase
-    .from("duels")
-    .update({
-      opponent_set_id: set_id,
-      opponent_line_score: opponentLineScore,
-      winner_id: winnerId,
-      status: "completed",
-    })
-    .eq("id", duel_id)
-    .select()
-    .single();
-
-  if (updateError) {
-    return new Response(JSON.stringify({ error: updateError.message }), { status: 400, headers: jsonHeaders });
-  }
-
-  // ELO needs to write both players' rankings rows, which RLS won't allow
-  // under either player's own JWT — same pattern as friend-activity/crew-leaderboard.
+  // The status transition and both ELO writes happen in one transaction
+  // inside public.resolve_duel (migration 015). Previously this was an
+  // unconditional UPDATE followed by two independent ranking updates, so a
+  // retry could complete the duel twice and apply ELO twice, and a failure
+  // between the two ranking writes left one player's rating moved and the
+  // other's not.
+  //
+  // The function reasserts status='accepted' at the write itself and returns
+  // null if no row transitioned, which is how a retry is detected. ELO is
+  // computed in there from rows locked in the same transaction rather than
+  // being passed in, so it cannot be derived from stale ratings.
   const admin = createClient(
     Deno.env.get("SUPABASE_URL")!,
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
   );
 
-  const { data: rankings } = await admin
-    .from("rankings")
-    .select("*")
-    .in("user_id", [duel.challenger_id, duel.opponent_id]);
+  const { data: resolved, error: resolveError } = await admin.rpc("resolve_duel", {
+    p_duel_id: duel_id,
+    p_opponent_id: user.id,
+    p_set_id: set_id,
+    p_opponent_line_score: opponentLineScore,
+    p_winner_id: winnerId,
+  });
 
-  const challengerRanking = rankings?.find((r) => r.user_id === duel.challenger_id);
-  const opponentRanking = rankings?.find((r) => r.user_id === duel.opponent_id);
-
-  if (challengerRanking && opponentRanking) {
-    const challengerWon = winnerId === duel.challenger_id;
-    const opponentWon = winnerId === duel.opponent_id;
-    const challengerResult = challengerWon ? 1 : opponentWon ? 0 : 0.5;
-    const opponentResult = 1 - challengerResult;
-
-    const challengerExpected = eloExpectedScore(challengerRanking.elo_rating, opponentRanking.elo_rating);
-    const opponentExpected = eloExpectedScore(opponentRanking.elo_rating, challengerRanking.elo_rating);
-
-    const newChallengerElo = eloNewRating(challengerRanking.elo_rating, challengerExpected, challengerResult);
-    const newOpponentElo = eloNewRating(opponentRanking.elo_rating, opponentExpected, opponentResult);
-
-    const nextStreak = (streak: number, best: number, won: boolean) => {
-      const newStreak = won ? streak + 1 : 0;
-      return { win_streak: newStreak, best_streak: Math.max(newStreak, best) };
-    };
-
-    await admin.from("rankings").update({
-      elo_rating: newChallengerElo,
-      wins: challengerRanking.wins + (challengerWon ? 1 : 0),
-      losses: challengerRanking.losses + (opponentWon ? 1 : 0),
-      ...nextStreak(challengerRanking.win_streak, challengerRanking.best_streak, challengerWon),
-    }).eq("user_id", duel.challenger_id);
-
-    await admin.from("rankings").update({
-      elo_rating: newOpponentElo,
-      wins: opponentRanking.wins + (opponentWon ? 1 : 0),
-      losses: opponentRanking.losses + (challengerWon ? 1 : 0),
-      ...nextStreak(opponentRanking.win_streak, opponentRanking.best_streak, opponentWon),
-    }).eq("user_id", duel.opponent_id);
+  if (resolveError) {
+    return new Response(JSON.stringify({ error: resolveError.message }), { status: 400, headers: jsonHeaders });
   }
 
-  return new Response(JSON.stringify({ duel: updatedDuel }), { headers: jsonHeaders });
+  // Lost the compare-and-swap: someone already resolved this duel. Report it
+  // rather than pretending this call is what completed it — and, critically,
+  // apply no ELO.
+  if (!resolved) {
+    return new Response(
+      JSON.stringify({ error: "duel already resolved" }),
+      { status: 409, headers: jsonHeaders },
+    );
+  }
+
+  return new Response(JSON.stringify({ duel: resolved }), { headers: jsonHeaders });
 });
