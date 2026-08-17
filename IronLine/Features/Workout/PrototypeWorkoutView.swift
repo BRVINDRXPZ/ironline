@@ -99,10 +99,12 @@ struct PrototypeWorkoutView: View {
                 .multilineTextAlignment(.center)
                 .frame(minHeight: 24)
 
-            if let angle = camera.elbowAngle {
-                Text("ELBOW  \(Int(angle.rounded()))°")
-                    .font(.caption.monospacedDigit().weight(.semibold))
-                    .foregroundStyle(Theme.Color.textSecondary)
+            HStack(spacing: 14) {
+                if let angle = camera.elbowAngle {
+                    telemetryLabel("ELBOW", value: "\(Int(angle.rounded()))°")
+                }
+                telemetryLabel("NO REPS", value: "\(camera.noRepCount)")
+                telemetryLabel("TRACK GAPS", value: "\(camera.trackingLossCount)")
             }
         }
     }
@@ -146,28 +148,74 @@ struct PrototypeWorkoutView: View {
     }
 
     private func resultCard(_ result: LineResult) -> some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(result.beatLine ? "LINE BEATEN" : "LINE MISSED")
-                    .font(.headline.weight(.black))
-                Text(String(format: "%+.1f%% VS EXPECTATION", result.scorePercent))
-                    .font(.caption.monospacedDigit().weight(.bold))
-                Text("\(camera.repsCompleted) VERIFIED · \(camera.repsAttempted) ATTEMPTED")
-                    .font(.caption2.monospacedDigit().weight(.bold))
-                    .foregroundStyle(Theme.Color.textSecondary)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(result.beatLine ? "LINE BEATEN" : "LINE MISSED")
+                        .font(.headline.weight(.black))
+                    Text(String(format: "%+.1f%% VS EXPECTATION", result.scorePercent))
+                        .font(.caption.monospacedDigit().weight(.bold))
+                }
+                Spacer()
+                Image(systemName: result.beatLine ? "arrow.up.right" : "arrow.down.right")
+                    .font(.title.weight(.black))
             }
-            Spacer()
-            Image(systemName: result.beatLine ? "arrow.up.right" : "arrow.down.right")
-                .font(.title.weight(.black))
+
+            HStack(spacing: 12) {
+                resultMetric("VERIFIED", value: "\(camera.repsCompleted)")
+                resultMetric("NO REPS", value: "\(camera.noRepCount)")
+                resultMetric("TRACK GAPS", value: "\(camera.trackingLossCount)")
+            }
+
+            ShareLink(item: setReportText(result)) {
+                Label("SHARE TEST SNAPSHOT", systemImage: "square.and.arrow.up")
+                    .font(.caption.weight(.black))
+            }
+            .foregroundStyle(Theme.Color.textPrimary)
         }
         .foregroundStyle(result.beatLine ? Theme.Color.success : Theme.Color.intensity)
         .padding(14)
         .background(Theme.Color.surface.opacity(0.94), in: RoundedRectangle(cornerRadius: Theme.Radius.card))
     }
 
+    private func telemetryLabel(_ title: String, value: String) -> some View {
+        HStack(spacing: 4) {
+            Text(title)
+                .foregroundStyle(Theme.Color.textSecondary)
+            Text(value)
+                .foregroundStyle(Theme.Color.textPrimary)
+        }
+        .font(.caption2.monospacedDigit().weight(.bold))
+    }
+
+    private func resultMetric(_ title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.system(size: 9, weight: .black, design: .monospaced))
+                .foregroundStyle(Theme.Color.textSecondary)
+            Text(value)
+                .font(.headline.monospacedDigit().weight(.black))
+                .foregroundStyle(Theme.Color.textPrimary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func setReportText(_ result: LineResult) -> String {
+        let outcome = result.beatLine ? "LINE BEATEN" : "LINE MISSED"
+        return """
+        IronLine First Playable Test
+        Exercise: Incline Dumbbell Press
+        Weight: \(format(weight)) lb
+        Verified reps: \(camera.repsCompleted)
+        No reps: \(camera.noRepCount)
+        Attempts resolved: \(camera.repsAttempted)
+        Tracking gaps: \(camera.trackingLossCount)
+        THE LINE: \(format(line.weight)) × \(line.reps)
+        Result: \(outcome) (\(String(format: "%+.1f%%", result.scorePercent)))
+        """
+    }
+
     private var feedbackText: String {
-        // Camera trust beats stale rep feedback. If tracking disappears, say so
-        // immediately instead of leaving the last VERIFIED message on screen.
         switch camera.trackingState {
         case .trackingLost:
             return camera.isSetActive ? "TRACKING LOST — RESET AT TOP" : "STEP INTO FRAME"
@@ -212,8 +260,6 @@ struct PrototypeWorkoutView: View {
     }
 
     private var cameraReadyToStart: Bool {
-        // A configured camera is not enough for a verified attempt. Require a
-        // currently detected pose before enabling the start action.
         if case .tracking = camera.trackingState {
             return true
         }
@@ -294,7 +340,6 @@ struct PrototypeWorkoutView: View {
                 backendStatus = "PROTOTYPE LINE"
             }
         } catch {
-            // Camera testing should still work if backend setup/migrations are not ready.
             backendStatus = "LOCAL MODE · \(error.localizedDescription.uppercased())"
         }
     }
