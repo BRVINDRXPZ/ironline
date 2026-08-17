@@ -15,6 +15,18 @@ struct PrototypeWorkoutView: View {
     @State private var result: LineResult?
     @State private var countdown: Int?
 
+    @State private var completedWeight = 70.0
+    @State private var completedVerifiedReps = 0
+    @State private var completedAttempts = 0
+    @State private var completedNoReps = 0
+    @State private var completedTrackingGaps = 0
+
+    @State private var showingDebrief = false
+    @State private var humanCompletedReps = 0
+    @State private var humanShallowReps = 0
+    @State private var agreesWithNoRepCalls: Bool?
+    @State private var lineMadeMePushHarder: Bool?
+
     @State private var workoutSessionID: UUID?
     @State private var exerciseID: UUID?
     @State private var setNumber = 1
@@ -47,6 +59,11 @@ struct PrototypeWorkoutView: View {
             .padding(.vertical, Theme.Spacing.md)
         }
         .navigationBarBackButtonHidden(false)
+        .sheet(isPresented: $showingDebrief) {
+            testDebrief
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
         .task {
             camera.prepareAndStart()
             await prepareBackend()
@@ -162,20 +179,86 @@ struct PrototypeWorkoutView: View {
             }
 
             HStack(spacing: 12) {
-                resultMetric("VERIFIED", value: "\(camera.repsCompleted)")
-                resultMetric("NO REPS", value: "\(camera.noRepCount)")
-                resultMetric("TRACK GAPS", value: "\(camera.trackingLossCount)")
+                resultMetric("VERIFIED", value: "\(completedVerifiedReps)")
+                resultMetric("NO REPS", value: "\(completedNoReps)")
+                resultMetric("TRACK GAPS", value: "\(completedTrackingGaps)")
             }
 
-            ShareLink(item: setReportText(result)) {
-                Label("SHARE TEST SNAPSHOT", systemImage: "square.and.arrow.up")
-                    .font(.caption.weight(.black))
+            HStack(spacing: 16) {
+                Button {
+                    showingDebrief = true
+                } label: {
+                    Label("LOG HUMAN CHECK", systemImage: "person.badge.shield.checkmark")
+                        .font(.caption.weight(.black))
+                }
+
+                ShareLink(item: setReportText(result)) {
+                    Label("SHARE", systemImage: "square.and.arrow.up")
+                        .font(.caption.weight(.black))
+                }
             }
             .foregroundStyle(Theme.Color.textPrimary)
         }
         .foregroundStyle(result.beatLine ? Theme.Color.success : Theme.Color.intensity)
         .padding(14)
         .background(Theme.Color.surface.opacity(0.94), in: RoundedRectangle(cornerRadius: Theme.Radius.card))
+    }
+
+    private var testDebrief: some View {
+        NavigationStack {
+            Form {
+                Section("HUMAN OBSERVER") {
+                    Stepper("Completed reps: \(humanCompletedReps)", value: $humanCompletedReps, in: 0...100)
+                    Stepper("Shallow / no-reps: \(humanShallowReps)", value: $humanShallowReps, in: 0...100)
+                }
+
+                Section("TRUST") {
+                    debriefChoice(
+                        title: "Did you agree with every NO REP call?",
+                        selection: $agreesWithNoRepCalls
+                    )
+
+                    debriefChoice(
+                        title: "Did THE LINE make you push harder?",
+                        selection: $lineMadeMePushHarder
+                    )
+                }
+
+                Section("IRONLINE REFEREE") {
+                    LabeledContent("Verified reps", value: "\(completedVerifiedReps)")
+                    LabeledContent("No-reps", value: "\(completedNoReps)")
+                    LabeledContent("Tracking gaps", value: "\(completedTrackingGaps)")
+                    LabeledContent("Rep-count delta", value: signed(completedVerifiedReps - humanCompletedReps))
+                }
+
+                Section {
+                    ShareLink(item: setReportText(result)) {
+                        Label("SHARE COMPLETE TEST SNAPSHOT", systemImage: "square.and.arrow.up")
+                            .font(.headline.weight(.bold))
+                    }
+                }
+            }
+            .navigationTitle("Set Debrief")
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { showingDebrief = false }
+                        .fontWeight(.bold)
+                }
+            }
+        }
+    }
+
+    private func debriefChoice(title: String, selection: Binding<Bool?>) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+            Picker(title, selection: selection) {
+                Text("NOT LOGGED").tag(Bool?.none)
+                Text("YES").tag(Bool?.some(true))
+                Text("NO").tag(Bool?.some(false))
+            }
+            .pickerStyle(.segmented)
+        }
+        .padding(.vertical, 4)
     }
 
     private func telemetryLabel(_ title: String, value: String) -> some View {
@@ -200,18 +283,32 @@ struct PrototypeWorkoutView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func setReportText(_ result: LineResult) -> String {
-        let outcome = result.beatLine ? "LINE BEATEN" : "LINE MISSED"
+    private func setReportText(_ result: LineResult?) -> String {
+        let outcome: String
+        let score: String
+        if let result {
+            outcome = result.beatLine ? "LINE BEATEN" : "LINE MISSED"
+            score = String(format: "%+.1f%%", result.scorePercent)
+        } else {
+            outcome = "NOT SCORED"
+            score = "N/A"
+        }
+
         return """
         IronLine First Playable Test
         Exercise: Incline Dumbbell Press
-        Weight: \(format(weight)) lb
-        Verified reps: \(camera.repsCompleted)
-        No reps: \(camera.noRepCount)
-        Attempts resolved: \(camera.repsAttempted)
-        Tracking gaps: \(camera.trackingLossCount)
+        Weight: \(format(completedWeight)) lb
+        IronLine verified reps: \(completedVerifiedReps)
+        IronLine no-reps: \(completedNoReps)
+        Attempts resolved: \(completedAttempts)
+        Tracking gaps: \(completedTrackingGaps)
+        Human completed reps: \(humanCompletedReps)
+        Human shallow/no-reps: \(humanShallowReps)
+        Rep-count delta (IronLine - human): \(signed(completedVerifiedReps - humanCompletedReps))
+        Agreed with every no-rep call: \(yesNo(agreesWithNoRepCalls))
+        THE LINE made me push harder: \(yesNo(lineMadeMePushHarder))
         THE LINE: \(format(line.weight)) × \(line.reps)
-        Result: \(outcome) (\(String(format: "%+.1f%%", result.scorePercent)))
+        Result: \(outcome) (\(score))
         """
     }
 
@@ -271,21 +368,29 @@ struct PrototypeWorkoutView: View {
             camera.endSet()
             let endedAt = Date()
             let startedAt = setStartedAt ?? endedAt
-            let completed = camera.repsCompleted
-            let attempted = camera.repsAttempted
-            let completedWeight = weight
+
+            completedWeight = weight
+            completedVerifiedReps = camera.repsCompleted
+            completedAttempts = camera.repsAttempted
+            completedNoReps = camera.noRepCount
+            completedTrackingGaps = camera.trackingLossCount
+
+            humanCompletedReps = completedVerifiedReps
+            humanShallowReps = completedNoReps
+            agreesWithNoRepCalls = nil
+            lineMadeMePushHarder = nil
 
             result = LineScoring.score(
                 actualWeight: completedWeight,
-                actualReps: completed,
+                actualReps: completedVerifiedReps,
                 against: line
             )
 
             Task {
                 await persistSet(
                     weight: completedWeight,
-                    repsCompleted: completed,
-                    repsAttempted: attempted,
+                    repsCompleted: completedVerifiedReps,
+                    repsAttempted: completedAttempts,
                     startedAt: startedAt,
                     endedAt: endedAt
                 )
@@ -393,5 +498,14 @@ struct PrototypeWorkoutView: View {
 
     private func format(_ value: Double) -> String {
         value.rounded() == value ? String(Int(value)) : String(format: "%.1f", value)
+    }
+
+    private func signed(_ value: Int) -> String {
+        value > 0 ? "+\(value)" : "\(value)"
+    }
+
+    private func yesNo(_ value: Bool?) -> String {
+        guard let value else { return "Not logged" }
+        return value ? "Yes" : "No"
     }
 }
