@@ -1,14 +1,27 @@
-// Generates a trash-talk line for an active duel using a self-hosted,
-// OpenAI-compatible chat endpoint (Ollama serving Qwen3.8-27B AD-IQ3_S,
-// reachable via Tailscale Funnel). Configure via Supabase secrets:
-//   LLM_API_BASE_URL  e.g. https://your-mac.tailXXXX.ts.net
-//   LLM_MODEL         e.g. qwen3.8:27b-iq3_s
-//   LLM_API_KEY       optional bearer token, if you put one in front of the tunnel
+// Generates a trash-talk line for an active duel using a self-hosted
+// Ollama model (huihui_ai/qwen3.5-abliterated:9b), reached through a local
+// auth proxy over Tailscale Funnel. Configure via Supabase secrets:
+//   LLM_API_BASE_URL  the proxy's Funnel URL, e.g. https://your-mac.tailXXXX.ts.net
+//   LLM_MODEL         e.g. huihui_ai/qwen3.5-abliterated:9b
+//   LLM_API_KEY       bearer token the proxy requires
+//
+// Uses Ollama's native /api/chat (not the OpenAI-compatible path) because
+// only the native endpoint supports "think": false — without it, this
+// model's reasoning mode runs indefinitely and never produces an answer.
+//
+// The system prompt locks the persona and explicitly forbids consoling the
+// losing side — without it, the model tends to console rather than mock,
+// which reads as broken for a trash-talk feature.
 //
 // Cosmetic feature — if the local endpoint is unreachable or unconfigured,
 // this skips quietly rather than failing anything duel-related.
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/cors.ts";
+
+const SYSTEM_PROMPT = "You are the hype-man announcer for a gym dueling app. Two friends have " +
+  "opted into competitive trash talk as part of the game. Always stay in hype-man persona and " +
+  "produce punchy trash talk. Never console, comfort, or encourage either side, and never break " +
+  "character to give real advice.";
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -51,15 +64,14 @@ Deno.serve(async (req) => {
   }
 
   const exerciseName = (duel.exercises as { name?: string } | null)?.name ?? "the exercise";
-  const prompt = `You're a hype-man coach for a gym app. Write ONE short, punchy trash-talk line ` +
-    `(under 20 words, no emoji) for an ongoing ${exerciseName} duel. ` +
-    `Challenger LINE score: ${duel.challenger_line_score ?? "n/a"}. ` +
+  const prompt = `Write ONE short, punchy trash-talk line (under 20 words, no emoji) for an ` +
+    `ongoing ${exerciseName} duel. Challenger LINE score: ${duel.challenger_line_score ?? "n/a"}. ` +
     `Opponent LINE score: ${duel.opponent_line_score ?? "n/a"}. Context: ${context}.`;
 
   let message: string | undefined;
   try {
     const apiKey = Deno.env.get("LLM_API_KEY");
-    const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+    const response = await fetch(`${baseUrl}/api/chat`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -67,11 +79,14 @@ Deno.serve(async (req) => {
       },
       body: JSON.stringify({
         model,
-        messages: [{ role: "user", content: prompt }],
-        max_tokens: 60,
-        temperature: 0.9,
+        think: false,
+        stream: false,
+        messages: [
+          { role: "system", content: SYSTEM_PROMPT },
+          { role: "user", content: prompt },
+        ],
       }),
-      signal: AbortSignal.timeout(8000),
+      signal: AbortSignal.timeout(30000),
     });
 
     if (!response.ok) {
@@ -79,7 +94,7 @@ Deno.serve(async (req) => {
     }
 
     const completion = await response.json();
-    message = completion.choices?.[0]?.message?.content?.trim();
+    message = completion.message?.content?.trim();
   } catch {
     return new Response(JSON.stringify({ skipped: true, reason: "local model unreachable" }), { headers: jsonHeaders });
   }

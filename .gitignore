@@ -24,3 +24,7 @@ IronLine/Resources/Secrets.plist
 supabase/.branches
 supabase/.temp
 supabase/.env
+
+# Local LLM proxy — machine-specific, never commit the auth token or logs
+ops/trash-talk-proxy/.token
+ops/trash-talk-proxy/proxy.log
