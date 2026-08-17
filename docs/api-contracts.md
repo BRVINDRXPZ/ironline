@@ -18,7 +18,7 @@ Reads and simple single-table writes. No business logic.
 | Create a crew (creator auto-added as leader) | `crews` |
 | Leave a crew / disband a crew you created | `crew_members`, `crews` |
 | Create / view your own invite codes | `invite_codes` |
-| Read your active duels / duel history | `duels` |
+| Read your active duels / duel history (read-only — see below) | `duels` |
 | Read your own ranking | `rankings` |
 | Read your own ghost record history | `ghost_records` |
 | Mark a trash-talk message seen | `trash_talk_log` |
@@ -42,9 +42,9 @@ Anything with cross-table logic, external calls, or rules that shouldn't ship in
 | `redeem-invite` | client redeems a code | looks up a `friend` or `crew` invite code, creates the friendship or crew membership |
 | `friend-activity` | client views a friend's activity | verifies the friendship, then returns their recent completed sessions + PRs |
 | `crew-leaderboard` | client views a crew's leaderboard | verifies membership, ranks the roster by each member's most recent `line_score` |
-| `create-duel` | challenger issues a duel | references a set they already saved, computes `challenger_line_score`, creates the duel (`pending`, expires in 48h) |
-| `respond-duel` | opponent responds | `action: accept/decline`; declining is terminal, no ELO change |
-| `resolve-duel` | opponent submits their set | computes `opponent_line_score`, picks the winner (or draw), updates both players' ELO — all in one call |
+| `create-duel` | challenger issues a duel | requires an **accepted friendship**; references a set they already saved that is theirs, matches the exercise, and is **under 48h old**; computes `challenger_line_score`, creates the duel (`pending`, expires in 48h). One live duel per (challenger, opponent, exercise); a set can back only one duel |
+| `respond-duel` | opponent responds | `action: accept/decline`; declining is terminal, no ELO change. Service-role write, authorized to this duel's opponent out of `pending` only |
+| `resolve-duel` | opponent submits their set | set must be theirs, match the exercise, and have been **performed after the duel was created**; computes `opponent_line_score`, picks the winner (or draw), then calls `resolve_duel` which transitions the duel and updates both ELOs in one transaction. Returns 409 if already resolved |
 | `get-ghost` | client requests ghost for an exercise | returns the caller's best *unbeaten* set to race, from `ghost_records` |
 | `generate-trash-talk` | during active duel rest periods | calls a self-hosted LLM with duel context, writes `trash_talk_log`; skips quietly if unreachable |
 
@@ -61,6 +61,14 @@ Most functions use the anon key + forwarded user JWT, so RLS applies exactly as 
 ### Self-hosted LLM for trash talk
 
 `generate-trash-talk` calls Ollama's native `/api/chat` (not the OpenAI-compatible path — only the native endpoint supports `"think": false`, which is required for this model to produce a timely answer instead of reasoning indefinitely). Configured via Supabase secrets: `LLM_API_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY`. Currently pointed at `huihui_ai/qwen3.5-abliterated:9b` running locally via Ollama, reached through an authenticated proxy (`ops/trash-talk-proxy/`) over a Tailscale Funnel — full setup and rationale in that directory's README. A persona-lock system prompt keeps tone consistent (without it, the model tends to console the losing side rather than mock them). Trash talk is cosmetic — if the endpoint is down or unconfigured, the function returns `{ skipped: true }` instead of erroring; nothing duel-related depends on it.
+
+### Competitive-state write authority (audited post-reconciliation)
+
+`duels` has **no client UPDATE policy**. It was removed in `015` after the audit found the original opponent policy (`for update using (auth.uid() = opponent_id)`, no `WITH CHECK`) let an opponent PATCH `winner_id` onto themselves through PostgREST. A column blacklist in RLS was rejected as the fix — every future column would default to writable. Accept/decline and resolution both run server-side in `respond-duel` and `resolve-duel`, which authorize the caller and then write with the service role.
+
+`rankings` likewise has no client write policy: ELO moves only inside `public.resolve_duel`, which is `SECURITY DEFINER` with EXECUTE revoked from `anon` and `authenticated`. A duel transitions `accepted → completed` exactly once — the status is reasserted in the `UPDATE ... WHERE`, and a retry gets 409 with no ELO applied.
+
+Backend invariants for all of the above are enforced in CI by `supabase/checks/authority-invariants.mjs`. They are static shape checks, not integration tests; concurrency behavior still needs verification against a real database.
 
 ## Security model (audited Phase 5)
 
