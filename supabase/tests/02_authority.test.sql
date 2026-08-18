@@ -137,11 +137,20 @@ select ok(
   '015: anon cannot EXECUTE resolve_duel');
 
 -- ----------------------------------------------------------------- constraints
+-- Insert the first version, then attempt to duplicate it. The previous version
+-- did both rows in a single INSERT ... UNION ALL, where both branches resolve
+-- as text before the assignment cast to uuid/numeric -- an avoidable wrinkle in
+-- a test whose subject is the unique index, not type resolution.
+insert into public.the_line
+  (user_id, exercise_id, predicted_weight, predicted_reps, confidence, baseline_sessions, version)
+values ('11111111-1111-1111-1111-111111111111'::uuid, '33333333-3333-3333-3333-333333333333'::uuid,
+        100::numeric, 8, 0.5::numeric, 3, 1);
+
 select throws_ok(
-  $q$ insert into public.the_line (user_id, exercise_id, predicted_weight, predicted_reps, confidence, baseline_sessions, version)
-      select '11111111-1111-1111-1111-111111111111','33333333-3333-3333-3333-333333333333',100,8,0.5,3,1
-      union all
-      select '11111111-1111-1111-1111-111111111111','33333333-3333-3333-3333-333333333333',110,8,0.5,3,1 $q$,
+  $q$ insert into public.the_line
+        (user_id, exercise_id, predicted_weight, predicted_reps, confidence, baseline_sessions, version)
+      values ('11111111-1111-1111-1111-111111111111'::uuid, '33333333-3333-3333-3333-333333333333'::uuid,
+              110::numeric, 8, 0.5::numeric, 3, 1) $q$,
   '23505', null, '013: (user, exercise, version) is unique');
 
 insert into public.invite_codes (code, kind, created_by, max_uses, use_count)
