@@ -298,26 +298,48 @@ async function testSharedPlayerConcurrency(db) {
   const d1 = await makeDuel(db, U1, U2, c1);
   const d2 = await makeDuel(db, U3, U2, c2);
 
+  // Each side is BEGIN -> resolve -> COMMIT as one unit, and the two units are
+  // started together. The previous version awaited both resolve_duel calls in a
+  // single Promise.all before committing either, which cannot work: whichever
+  // transaction wins the shared ranking row finishes its statement but is then
+  // forbidden from committing until the other returns, and the other cannot
+  // return until that row is released. That is a deadlock manufactured by the
+  // test, not by the schema.
+  //
+  // Postgres said so, too. It reported 57014 (statement timeout), not 40P01
+  // (deadlock detected). A genuine lock cycle would have been broken by the
+  // deadlock detector in about a second; a plain wait means the second
+  // transaction had acquired everything it needed and was simply being held
+  // open by the harness.
+  const resolveUnit = async (client, duelId, opponentSet) => {
+    await client.query("BEGIN");
+    try {
+      const res = await client.query("select * from public.resolve_duel($1,$2,$3,$4,$5)",
+                                     [duelId, U2, opponentSet, 20, U2]);
+      await client.query("COMMIT");
+      return res;
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch (x) { /* already aborted */ }
+      throw e;
+    }
+  };
+
   const a = await connect();
   const b = await connect();
   try {
-    await Promise.all([a.query("BEGIN"), b.query("BEGIN")]);
     const [ra, rb] = await Promise.all([
-      a.query("select * from public.resolve_duel($1,$2,$3,$4,$5)", [d1, U2, o1, 20, U2]),
-      b.query("select * from public.resolve_duel($1,$2,$3,$4,$5)", [d2, U2, o2, 20, U2]),
+      resolveUnit(a, d1, o1),
+      resolveUnit(b, d2, o2),
     ]);
-    await Promise.all([a.query("COMMIT"), b.query("COMMIT")]);
     ok("two duels sharing a player both resolve without deadlock", transitioned(ra) && transitioned(rb));
   } catch (e) {
     ok("two duels sharing a player both resolve without deadlock", false,
-       e.code === "40P01" ? "deadlock detected (40P01)" : "error " + e.code + ": " + e.message);
-    try { await a.query("ROLLBACK"); } catch (x) {}
-    try { await b.query("ROLLBACK"); } catch (x) {}
+       e.code === "40P01" ? "deadlock detected (40P01) -- the lock ordering did not hold"
+                          : "error " + e.code + ": " + e.message);
   } finally {
     await a.end();
     await b.end();
   }
-
   const r = (await db.query("select wins, losses, elo_rating from public.rankings where user_id = $1", [U2])).rows[0];
   ok("shared player has no partial ranking update", Number(r.wins) === 2,
      "wins=" + r.wins + " losses=" + r.losses + " elo=" + r.elo_rating);
