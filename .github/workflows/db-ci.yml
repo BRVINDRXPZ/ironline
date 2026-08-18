@@ -74,9 +74,16 @@ jobs:
           CODE=$?
           echo "$OUT"
           if [ "$CODE" -ne 0 ]; then
-            echo "$OUT" | grep -viE '^\s*$' | tail -n 30 | while IFS= read -r line; do
-              echo "::error title=pgtap::${line}"
-            done
+            # Annotations are capped per step, and a cold pg_prove image pull
+            # floods stdout with layer lines. Keep only pgTAP-relevant output so
+            # the cap is spent on the actual diagnostic rather than Docker noise.
+            echo "$OUT" \
+              | grep -viE 'pull complete|download complete|waiting|extracting|verifying|digest:|pulling from|image for|already exists' \
+              | grep -iE 'not ok|failed|looks like|error|fatal|\.test\.sql|result:|aborted' \
+              | head -n 25 \
+              | while IFS= read -r line; do
+                  echo "::error title=pgtap::${line}"
+                done
           fi
           exit "$CODE"
 
