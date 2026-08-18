@@ -63,8 +63,22 @@ jobs:
 
       # Schema, policies, grants and constraints. Asserts the real denials, not
       # the presence of a DROP POLICY line.
+      # `supabase test db` failure detail only exists in the raw job log, which
+      # needs admin scope to download. Echo the output back as ::error::
+      # annotations so the actual pgTAP diagnostic is readable from the checks
+      # API instead of just "exit code 1".
       - name: pgTAP database tests
-        run: supabase test db
+        run: |
+          set +e
+          OUT=$(supabase test db 2>&1)
+          CODE=$?
+          echo "$OUT"
+          if [ "$CODE" -ne 0 ]; then
+            echo "$OUT" | grep -viE '^\s*$' | tail -n 30 | while IFS= read -r line; do
+              echo "::error title=pgtap::${line}"
+            done
+          fi
+          exit "$CODE"
 
       - name: Install concurrency test deps
         working-directory: supabase/tests/concurrency

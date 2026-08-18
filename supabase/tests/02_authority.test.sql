@@ -81,14 +81,17 @@ select is_empty(
 reset role;
 
 -- --------------------------------------------------- resolver EXECUTE grants
-select function_privs_are('public', 'resolve_duel',
-  array['uuid','uuid','uuid','numeric','uuid'], 'service_role', array['EXECUTE'],
+-- has_function_privilege rather than function_privs_are: the latter needs the
+-- argument-type signature to match exactly how Postgres recorded it, which is
+-- an easy way to fail for a reason unrelated to the invariant being tested.
+select ok(
+  has_function_privilege('service_role', 'public.resolve_duel(uuid,uuid,uuid,numeric,uuid)', 'EXECUTE'),
   '015: service_role can EXECUTE resolve_duel');
-select function_privs_are('public', 'resolve_duel',
-  array['uuid','uuid','uuid','numeric','uuid'], 'authenticated', array[]::text[],
+select ok(
+  not has_function_privilege('authenticated', 'public.resolve_duel(uuid,uuid,uuid,numeric,uuid)', 'EXECUTE'),
   '015: authenticated cannot EXECUTE resolve_duel');
-select function_privs_are('public', 'resolve_duel',
-  array['uuid','uuid','uuid','numeric','uuid'], 'anon', array[]::text[],
+select ok(
+  not has_function_privilege('anon', 'public.resolve_duel(uuid,uuid,uuid,numeric,uuid)', 'EXECUTE'),
   '015: anon cannot EXECUTE resolve_duel');
 
 -- ----------------------------------------------------------------- constraints
