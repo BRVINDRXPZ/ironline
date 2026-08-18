@@ -1,3 +1,11 @@
+-- pgTAP lives in the extensions schema on Supabase, which is not on the
+-- default search_path for a plain psql session, so plan()/has_table() would
+-- not resolve. Create it if absent (the local CI database is disposable and
+-- postgres is superuser there) and put it on the path. Deliberately NOT a
+-- migration: pgTAP must never be installed into the production project.
+create extension if not exists pgtap with schema extensions;
+set search_path to extensions, public, pg_catalog;
+
 -- Write authority: after 013/019/020/021 an authenticated client must not be
 -- able to author competitive state directly. These assert the actual denial,
 -- not the presence of a DROP POLICY line, which is all a static check sees.

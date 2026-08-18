@@ -1,3 +1,11 @@
+-- pgTAP lives in the extensions schema on Supabase, which is not on the
+-- default search_path for a plain psql session, so plan()/has_table() would
+-- not resolve. Create it if absent (the local CI database is disposable and
+-- postgres is superuser there) and put it on the path. Deliberately NOT a
+-- migration: pgTAP must never be installed into the production project.
+create extension if not exists pgtap with schema extensions;
+set search_path to extensions, public, pg_catalog;
+
 -- Migration bootstrap: a fresh database applied 001-021 and ended up with the
 -- objects the reconciled system expects. This runs after `supabase db reset`,
 -- so reaching this file at all already proves the chain applied cleanly.

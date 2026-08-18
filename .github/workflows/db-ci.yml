@@ -49,6 +49,18 @@ jobs:
           echo "--- migration files in repo ---"
           ls supabase/migrations
 
+      # If pgTAP resolution fails again, this puts the reason in the step output
+      # instead of leaving it to guesswork -- the raw job log needs admin scope
+      # to download, so the diagnosis has to be visible here.
+      - name: Probe pgTAP availability
+        env:
+          PGURL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+        run: |
+          psql "$PGURL" -c "select name, default_version, installed_version from pg_available_extensions where name = 'pgtap';"
+          psql "$PGURL" -c "select extname, nspname from pg_extension e join pg_namespace n on n.oid = e.extnamespace;"
+          echo "--- test files discovered ---"
+          ls -la supabase/tests
+
       # Schema, policies, grants and constraints. Asserts the real denials, not
       # the presence of a DROP POLICY line.
       - name: pgTAP database tests
