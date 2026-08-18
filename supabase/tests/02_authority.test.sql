@@ -10,7 +10,7 @@ set search_path to extensions, public, pg_catalog;
 -- able to author competitive state directly. These assert the actual denial,
 -- not the presence of a DROP POLICY line, which is all a static check sees.
 begin;
-select plan(19);
+select plan(24);
 
 -- Real auth users, because public.users FKs to auth.users.
 insert into auth.users (id, instance_id, aud, role, email, encrypted_password,
@@ -34,6 +34,21 @@ insert into public.sets (id, session_id, exercise_id, set_number, weight, reps_c
 values ('55555555-5555-5555-5555-555555555555', '44444444-4444-4444-4444-444444444444',
         '33333333-3333-3333-3333-333333333333', 1, 100, 8, 8, now());
 
+-- Tamper targets, seeded as postgres so RLS is bypassed. Deliberately on a
+-- SECOND exercise: 017 allows only one active duel per unordered pair per
+-- exercise, and the matchup tests further down use the first one. Sharing it
+-- here would make those collide for the wrong reason.
+insert into public.exercises (id, name, muscle_group, joint_config)
+values ('33333333-3333-3333-3333-333333333334', 'Test Row', 'Back', '{}'::jsonb);
+
+insert into public.duels (id, challenger_id, opponent_id, exercise_id, status)
+values ('77777777-7777-7777-7777-777777777777','22222222-2222-2222-2222-222222222222',
+        '11111111-1111-1111-1111-111111111111','33333333-3333-3333-3333-333333333334','pending');
+
+insert into public.ghost_records (id, user_id, exercise_id, set_id, weight, reps, beaten)
+values ('88888888-8888-8888-8888-888888888888','11111111-1111-1111-1111-111111111111',
+        '33333333-3333-3333-3333-333333333333','55555555-5555-5555-5555-555555555555',100,8,false);
+
 -- --------------------------------------------------------------- as a client
 set local role authenticated;
 set local request.jwt.claims to '{"sub":"11111111-1111-1111-1111-111111111111","role":"authenticated"}';
@@ -54,15 +69,14 @@ select throws_ok(
       values ('44444444-4444-4444-4444-444444444444','33333333-3333-3333-3333-333333333333',2,999,99,99,now()) $q$,
   '42501', null, '020: client cannot INSERT sets');
 
--- An UPDATE with no matching policy filters to zero rows rather than erroring,
--- so assert the row is genuinely unchanged instead of expecting a throw.
-select lives_ok(
+-- 022 revokes the UPDATE privilege outright, so this is denied at the grant
+-- layer and raises 42501 without ever reaching RLS. The previous version of
+-- this test expected lives_ok, on the theory that a policy-less UPDATE quietly
+-- filters to zero rows. That is true when the grant exists and only the policy
+-- is missing; it is wrong when the privilege itself is revoked.
+select throws_ok(
   $q$ update public.sets set weight = 999 where id = '55555555-5555-5555-5555-555555555555' $q$,
-  '020: client UPDATE on sets raises nothing');
-select is(
-  (select weight from public.sets where id = '55555555-5555-5555-5555-555555555555'),
-  100::numeric(6,1),
-  '020: ... and the set is genuinely unchanged');
+  '42501', null, '020: client UPDATE on sets is denied');
 
 select throws_ok(
   $q$ insert into public.ghost_records (user_id, exercise_id, set_id, weight, reps)
@@ -78,7 +92,35 @@ select is_empty(
   $q$ select 1 from public.workout_sessions where user_id = '22222222-2222-2222-2222-222222222222' $q$,
   'a user still cannot SELECT another users sessions');
 
+
+-- Direct tampering with competitive rows the caller can legitimately SELECT.
+-- These are the assertions that actually matter: reading your own duel is
+-- fine, rewriting its outcome is not. 019 and 021 revoke UPDATE, so both are
+-- refused at the grant layer.
+select throws_ok(
+  $q$ update public.duels set status = 'completed', winner_id = '11111111-1111-1111-1111-111111111111',
+      challenger_line_score = 999, opponent_line_score = -999
+      where id = '77777777-7777-7777-7777-777777777777' $q$,
+  '42501', null, '019: client cannot UPDATE duel status, scores or winner');
+
+select throws_ok(
+  $q$ update public.ghost_records set beaten = true, weight = 1, reps = 1,
+      beaten_by_set_id = '55555555-5555-5555-5555-555555555555'
+      where id = '88888888-8888-8888-8888-888888888888' $q$,
+  '42501', null, '021: client cannot UPDATE ghost beaten flag, weight or reps');
+
 reset role;
+
+-- Back to a privileged role: confirm the attempted mutations above left no
+-- trace. A denial that still wrote would be the worst possible outcome.
+select is((select weight from public.sets where id = '55555555-5555-5555-5555-555555555555'),
+          100::numeric(6,1), 'sets row is byte-for-byte unchanged after the denied UPDATE');
+select is((select status from public.duels where id = '77777777-7777-7777-7777-777777777777'),
+          'pending', 'duel status unchanged after the denied UPDATE');
+select is((select winner_id from public.duels where id = '77777777-7777-7777-7777-777777777777'),
+          null::uuid, 'duel winner still unset after the denied UPDATE');
+select is((select beaten from public.ghost_records where id = '88888888-8888-8888-8888-888888888888'),
+          false, 'ghost not marked beaten after the denied UPDATE');
 
 -- --------------------------------------------------- resolver EXECUTE grants
 -- has_function_privilege rather than function_privs_are: the latter needs the

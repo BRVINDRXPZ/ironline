@@ -280,6 +280,36 @@ check(
   "008's sweep skips in_progress; with expiry now in the transition conditions, such a duel could never expire, be answered, or be resolved.",
 );
 
+// ------------------------------------------------------ data API privileges
+// 022 makes the Data API grants explicit. A fresh chain granted nothing at all,
+// so production only worked via ambient default privileges that live in the
+// project rather than in this repo. Guard both halves of the model.
+const privileges = readSql("migrations/022_data_api_privileges.sql");
+
+for (const t of ["sets", "the_line", "duels", "ghost_records"]) {
+  check(
+    `022 revokes authenticated write on ${t}`,
+    new RegExp(`revoke[^;]*on public.${t} from authenticated`, "is").test(privileges),
+    "A grant would re-open the write path the authority migrations closed.",
+  );
+  check(
+    `022 still grants authenticated SELECT on ${t}`,
+    new RegExp(`grant select[^;]*on public.${t} to authenticated`, "is").test(privileges),
+    "Owner-scoped reads must keep working; RLS decides which rows.",
+  );
+}
+
+check(
+  "022 grants anon nothing",
+  !/grant[^;]*to[^;]*anon/is.test(privileges) && /revoke all on all tables in schema public from anon/i.test(privileges),
+  "V1 has no unauthenticated surface; granting anon widens attack surface for no feature.",
+);
+
+check(
+  "022 avoids blanket ALL grants",
+  !/grants+alls+(privilegess+)?on/i.test(privileges),
+  "Privileges are enumerated per table on purpose.",
+);
 // -------------------------------------------------- save-set input hygiene
 check(
   "save-set rejects impossible payloads",

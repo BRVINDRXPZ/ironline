@@ -35,7 +35,7 @@ jobs:
       # fresh database. Reaching the end of this step is itself the bootstrap
       # assertion: the full 001->021 chain applied cleanly from scratch,
       # including the pg_cron work in 008 and 021.
-      - name: Start local Supabase (applies migrations 001-021 from scratch)
+      - name: Start local Supabase (applies migrations 001-022 from scratch)
         run: supabase start
 
       # Explicit from-scratch re-apply of the whole chain, so the bootstrap
@@ -69,7 +69,7 @@ jobs:
       #
       # Compact single-line-per-table output so it survives the annotation cap.
       # S=SELECT I=INSERT U=UPDATE D=DELETE, "-" means no grant.
-      - name: "Stage A: privilege matrix from a fresh 001-021 chain"
+      - name: "Privilege matrix (diagnostic)"
         env:
           PGURL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
         run: |
@@ -110,16 +110,18 @@ jobs:
           echo "=== DEFAULT ACLS (public, tables) ==="; echo "$DEF"
 
           {
-            echo "## Stage A: privileges from a fresh 001-021 chain"
+            echo "## Data API privilege matrix"
             echo '```'; echo "$TBL"; echo '```'
             echo '### function grants'; echo '```'; echo "$FN"; echo '```'
             echo '### default ACLs'; echo '```'; echo "$DEF"; echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-          # Annotations too, because the step summary is not always reachable
-          # from the checks API without elevated scope.
-          echo "$TBL" | while IFS= read -r l; do echo "::error title=grants::${l}"; done
-          echo "::error title=grants::DEFAULT_ACL ${DEF}"
+          # Emitted as notices, not errors. This was temporarily ::error:: to get the
+          # matrix out through the checks API while diagnosing the missing-grant
+          # defect; keeping it that way would mark every green run with failure
+          # annotations.
+          echo "$TBL" | while IFS= read -r l; do echo "::notice title=grants::${l}"; done
+          echo "::notice title=grants::DEFAULT_ACL ${DEF}"
 
       # Schema, policies, grants and constraints. Asserts the real denials, not
       # the presence of a DROP POLICY line.

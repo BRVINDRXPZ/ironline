@@ -6,7 +6,7 @@
 create extension if not exists pgtap with schema extensions;
 set search_path to extensions, public, pg_catalog;
 
--- Migration bootstrap: a fresh database applied 001-021 and ended up with the
+-- Migration bootstrap: a fresh database applied 001-022 and ended up with the
 -- objects the reconciled system expects. This runs after `supabase db reset`,
 -- so reaching this file at all already proves the chain applied cleanly.
 begin;
