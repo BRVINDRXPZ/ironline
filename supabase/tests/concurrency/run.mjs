@@ -29,6 +29,13 @@ const ok = (name, cond, detail = "") => {
 const connect = async () => {
   const c = new pg.Client({ connectionString: CONN });
   await c.connect();
+  // A real hang must fail loudly rather than sit until the job timeout kills
+  // the step with no output. Every intentional block in this file is released
+  // within a second of the holding transaction committing, so these ceilings
+  // only ever fire on a genuine stall.
+  await c.query("set statement_timeout = '20s'");
+  await c.query("set lock_timeout = '20s'");
+  await c.query("set idle_in_transaction_session_timeout = '30s'");
   return c;
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -316,6 +323,16 @@ async function testSharedPlayerConcurrency(db) {
      "wins=" + r.wins + " losses=" + r.losses + " elo=" + r.elo_rating);
 }
 
+// Watchdog. Without this a stall just burns the 20-minute job timeout and the
+// step is killed before printing anything, which tells us nothing about where
+// it stuck. Exiting non-zero means the workflow wrapper still emits the output
+// as annotations, so the last [scenario] line shows the stall point.
+const watchdog = setTimeout(() => {
+  console.error("ERROR WATCHDOG: harness exceeded 240s; see the last [scenario] line for the stall point");
+  process.exit(1);
+}, 240000);
+watchdog.unref?.();
+
 const db = await connect();
 try {
   await testExactlyOnceResolution(db);
@@ -325,6 +342,7 @@ try {
   await testSharedPlayerConcurrency(db);
 } finally {
   await db.end();
+  clearTimeout(watchdog);
 }
 
 console.log("\n" + passed + " passed, " + failures.length + " failed");
