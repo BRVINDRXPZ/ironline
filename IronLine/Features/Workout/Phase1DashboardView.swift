@@ -124,7 +124,7 @@ struct Phase1DashboardView: View {
     private var gateCard: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .firstTextBaseline) {
-                Text(percent(summary.repCountAgreement))
+                Text(Format.percent(summary.repCountAgreement))
                     .font(.system(size: 52, weight: .black, design: .rounded))
                     .monospacedDigit()
                 Spacer()
@@ -188,8 +188,8 @@ struct Phase1DashboardView: View {
                 .tracking(1.8)
                 .foregroundStyle(Theme.Color.textSecondary)
 
-            valueRow("NO-REP TRUST", value: summary.noRepTrustRate.map(percent) ?? "NO DATA")
-            valueRow("THE LINE PUSH RATE", value: summary.linePushRate.map(percent) ?? "NO DATA")
+            valueRow("NO-REP TRUST", value: summary.noRepTrustRate.map(Format.percent) ?? "NO DATA")
+            valueRow("THE LINE PUSH RATE", value: summary.linePushRate.map(Format.percent) ?? "NO DATA")
         }
         .padding(Theme.Spacing.md)
         .background(Theme.Color.surface.opacity(0.78), in: RoundedRectangle(cornerRadius: Theme.Radius.card))
@@ -211,7 +211,7 @@ struct Phase1DashboardView: View {
                     HStack {
                         VStack(alignment: .leading, spacing: 2) {
                             HStack(spacing: 6) {
-                                Text("\(format(record.weight)) LB")
+                                Text("\(Format.number(record.weight)) LB")
                                     .font(.subheadline.monospacedDigit().weight(.black))
                                 if let tester = record.testerID {
                                     Text("T\(tester)")
@@ -224,7 +224,7 @@ struct Phase1DashboardView: View {
                                 .foregroundStyle(Theme.Color.textSecondary)
                         }
                         Spacer()
-                        Text(percent(record.repCountAgreement))
+                        Text(Format.percent(record.repCountAgreement))
                             .font(.caption.monospacedDigit().weight(.black))
                             .foregroundStyle(record.repCountAgreement >= 0.90 ? Theme.Color.success : Theme.Color.intensity)
                     }
@@ -283,7 +283,7 @@ struct Phase1DashboardView: View {
         IronLine Phase 1 Referee Report
         Exercise: Incline Dumbbell Press
         Sets logged: \(summary.setCount)
-        Rep agreement: \(percent(summary.repCountAgreement))
+        Rep agreement: \(Format.percent(summary.repCountAgreement))
         90% gate: \(summary.meetsRepAgreementGate ? "PASS" : "NOT YET")
         Protocol coverage: \(summary.meetsProtocolCoverageGate ? "PASS" : "NOT YET")
         \(progress.isEmpty ? "No labeled tester coverage yet" : progress)
@@ -292,16 +292,9 @@ struct Phase1DashboardView: View {
         Potential false NO REPs: \(summary.potentialFalseNoReps)
         Missed shallow NO REPs: \(summary.missedShallowNoReps)
         Tracking gaps: \(summary.totalTrackingGaps) across \(summary.setsWithTrackingGaps) sets
-        No-rep trust: \(summary.noRepTrustRate.map(percent) ?? "NO DATA")
-        THE LINE push rate: \(summary.linePushRate.map(percent) ?? "NO DATA")
+        No-rep trust: \(summary.noRepTrustRate.map(Format.percent) ?? "NO DATA")
+        THE LINE push rate: \(summary.linePushRate.map(Format.percent) ?? "NO DATA")
         """
     }
 
-    private func percent(_ value: Double) -> String {
-        "\(Int((value * 100).rounded()))%"
-    }
-
-    private func format(_ value: Double) -> String {
-        value.rounded() == value ? String(Int(value)) : String(format: "%.1f", value)
-    }
 }

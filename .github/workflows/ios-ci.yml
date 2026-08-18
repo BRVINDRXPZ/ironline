@@ -17,6 +17,9 @@ jobs:
       - name: Create CI Secrets.plist
         run: cp IronLine/Resources/Secrets.plist.example IronLine/Resources/Secrets.plist
 
+      - name: Backend authority invariants
+        run: node supabase/checks/authority-invariants.mjs
+
       - name: Show Xcode environment
         run: |
           xcodebuild -version

@@ -1,3 +1,16 @@
+-- Forward-only continuation of the applied production history (001-012).
+-- Originally authored as 006_incline_dumbbell_press.sql on the camera/referee
+-- fork, where it was never applied to production. Renumbered to follow 013
+-- rather than rewriting applied history. Behaviour is unchanged.
+--
+-- Depends only on 002_exercises (applied): public.exercises exists and
+-- exercises.name carries a unique constraint, which the upsert below requires.
+-- Additive and idempotent — inserts one new catalog row, touches no existing
+-- exercise, and re-running it only refreshes this row's own joint_config.
+-- Thresholds here mirror the client RepCounter defaults (top 155 degrees,
+-- bottom 100 degrees, confidence 0.35, median window 5); keep them in step
+-- when gym testing retunes the referee.
+--
 -- First playable exercise. Keep this separate from generic Bench Press so
 -- camera thresholds and history are not mixed across materially different lifts.
 insert into public.exercises (name, muscle_group, joint_config, is_active)

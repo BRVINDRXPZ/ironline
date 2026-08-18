@@ -9,8 +9,4 @@ final class AppState: ObservableObject {
         currentUser = nil
         isLocalPrototypeMode = true
     }
-
-    func exitLocalPrototype() {
-        isLocalPrototypeMode = false
-    }
 }

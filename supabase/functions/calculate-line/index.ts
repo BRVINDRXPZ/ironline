@@ -10,7 +10,13 @@
 //
 // Important authority rule: the user-scoped client is used for authentication
 // and RLS-protected reads. Only the service-role client may write THE LINE, so
-// clients cannot forge competitive state directly.
+// a client cannot author a the_line row directly.
+//
+// That is a statement about write paths, not about trustworthiness. THE LINE
+// is derived from `sets`, and save-set stores the rep/weight/ROM values its
+// caller reports — so a fabricated set still produces a "legitimately"
+// computed LINE. See 020_set_authority.sql for where that boundary actually
+// sits.
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/cors.ts";
 import { estimatedOneRepMax, predictedWeightFor } from "../_shared/line.ts";
