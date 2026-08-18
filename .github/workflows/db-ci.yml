@@ -156,11 +156,25 @@ jobs:
       # Real overlapping transactions: exactly-once resolution, ELO applied
       # once, expiry refusal, global set claims, invite max_uses, and a shared
       # player across two simultaneous resolutions.
+      # Same annotation trick as the pgTAP step: the harness prints plain console
+      # output, which lives only in the raw job log. Re-emit the result lines so
+      # a failing concurrency scenario is readable from the checks API.
       - name: Concurrency tests (real simultaneous transactions)
         working-directory: supabase/tests/concurrency
         env:
           DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
-        run: node run.mjs
+        run: |
+          set +e
+          OUT=$(node run.mjs 2>&1)
+          CODE=$?
+          echo "$OUT"
+          if [ "$CODE" -ne 0 ]; then
+            echo "$OUT" | grep -iE 'FAIL|passed,|  x |error|\[' | head -n 25 \
+              | while IFS= read -r line; do
+                  echo "::error title=concurrency::${line}"
+                done
+          fi
+          exit "$CODE"
 
       - name: Dump database logs on failure
         if: failure()
