@@ -61,6 +61,66 @@ jobs:
           echo "--- test files discovered ---"
           ls -la supabase/tests
 
+      # STAGE A -- report the privilege model the fresh migration chain actually
+      # produces, before changing anything. The pgTAP failure was
+      # "permission denied for table workout_sessions" on a plain SELECT, which
+      # is a table-level GRANT problem, not an RLS one: policies never get
+      # consulted if the role has no privilege on the table at all.
+      #
+      # Compact single-line-per-table output so it survives the annotation cap.
+      # S=SELECT I=INSERT U=UPDATE D=DELETE, "-" means no grant.
+      - name: "Stage A: privilege matrix from a fresh 001-021 chain"
+        env:
+          PGURL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+        run: |
+          set -e
+          TBL=$(psql "$PGURL" -At -c "
+            select table_name
+                   || ' auth=' || coalesce(a,'-')
+                   || ' svc='  || coalesce(s,'-')
+                   || ' anon=' || coalesce(an,'-')
+              from (
+                select table_name,
+                  string_agg(distinct left(privilege_type,1), '' order by left(privilege_type,1))
+                    filter (where grantee = 'authenticated') as a,
+                  string_agg(distinct left(privilege_type,1), '' order by left(privilege_type,1))
+                    filter (where grantee = 'service_role')  as s,
+                  string_agg(distinct left(privilege_type,1), '' order by left(privilege_type,1))
+                    filter (where grantee = 'anon')          as an
+                from information_schema.role_table_grants
+                where table_schema = 'public'
+                  and privilege_type in ('SELECT','INSERT','UPDATE','DELETE')
+                group by table_name
+              ) x order by table_name;")
+
+          FN=$(psql "$PGURL" -At -c "
+            select routine_name || ' -> ' || string_agg(distinct grantee, ',' order by grantee)
+              from information_schema.role_routine_grants
+             where specific_schema = 'public'
+               and grantee in ('anon','authenticated','service_role')
+             group by routine_name order by routine_name;")
+
+          DEF=$(psql "$PGURL" -At -c "
+            select coalesce(string_agg(defaclrole::regrole::text || ':' || defaclacl::text, ' | '), 'NONE')
+              from pg_default_acl d join pg_namespace n on n.oid = d.defaclnamespace
+             where n.nspname = 'public' and d.defaclobjtype = 'r';")
+
+          echo "=== TABLE GRANTS ==="; echo "$TBL"
+          echo "=== FUNCTION GRANTS ==="; echo "$FN"
+          echo "=== DEFAULT ACLS (public, tables) ==="; echo "$DEF"
+
+          {
+            echo "## Stage A: privileges from a fresh 001-021 chain"
+            echo '```'; echo "$TBL"; echo '```'
+            echo '### function grants'; echo '```'; echo "$FN"; echo '```'
+            echo '### default ACLs'; echo '```'; echo "$DEF"; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # Annotations too, because the step summary is not always reachable
+          # from the checks API without elevated scope.
+          echo "$TBL" | while IFS= read -r l; do echo "::error title=grants::${l}"; done
+          echo "::error title=grants::DEFAULT_ACL ${DEF}"
+
       # Schema, policies, grants and constraints. Asserts the real denials, not
       # the presence of a DROP POLICY line.
       # `supabase test db` failure detail only exists in the raw job log, which
